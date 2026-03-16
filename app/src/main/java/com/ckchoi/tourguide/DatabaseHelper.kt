@@ -4,12 +4,14 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.util.Log
 
 class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
     companion object {
         private const val DATABASE_NAME = "tourguide.db"
-        private const val DATABASE_VERSION = 6 // 지역ID 컬럼 추가로 인한 버전 업
+        // [수정] 날씨용 지역명 추가로 인한 버전 7로 업그레이드
+        private const val DATABASE_VERSION = 7
 
         // 공통 컬럼
         const val COLUMN_ID = "id"
@@ -29,7 +31,8 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         // 3. Regions 테이블
         const val TABLE_REGIONS = "regions"
         const val COLUMN_REGION_NAME = "region_name"
-        const val COLUMN_REGION_CODE = "region_code" // [신규] 지역ID
+        const val COLUMN_REGION_CODE = "region_code"
+        const val COLUMN_WEATHER_REGION = "weather_region_name" // [신규] API 조회용 날씨 영문 지역명
         const val COLUMN_COUNTRY_ID = "country_id"
         const val COLUMN_REGION_DATA = "region_data"
 
@@ -54,11 +57,12 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
                 + "$COLUMN_COUNTRY_NAME TEXT, $COLUMN_FLAG TEXT, $COLUMN_CODE TEXT, "
                 + "$COLUMN_BASIC_INFO TEXT DEFAULT '', $COLUMN_USEFUL_INFO TEXT DEFAULT '')")
 
-        // region_code 컬럼 추가됨
+        // [수정] region_code 및 weather_region_name 컬럼 포함 생성
         db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_REGIONS ("
                 + "$COLUMN_ID INTEGER PRIMARY KEY AUTOINCREMENT, "
                 + "$COLUMN_REGION_NAME TEXT, "
                 + "$COLUMN_REGION_CODE TEXT, "
+                + "$COLUMN_WEATHER_REGION TEXT DEFAULT '', "
                 + "$COLUMN_REGION_DATA TEXT DEFAULT '', "
                 + "$COLUMN_COUNTRY_ID INTEGER, "
                 + "FOREIGN KEY($COLUMN_COUNTRY_ID) REFERENCES $TABLE_COUNTRIES($COLUMN_ID) ON DELETE CASCADE)")
@@ -76,12 +80,24 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_PHRASES")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_PHRASE_CATEGORIES")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_REGIONS")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_COUNTRIES")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_DESTINATIONS")
-        onCreate(db)
+        // [핵심] 기존 사용자의 데이터를 보존하면서 앱 크래시를 방지하는 마이그레이션 로직
+        if (oldVersion < 6) {
+            // 버전 6 이전에서 올라오는 경우 기존 로직 유지 (테이블 초기화)
+            db.execSQL("DROP TABLE IF EXISTS $TABLE_PHRASES")
+            db.execSQL("DROP TABLE IF EXISTS $TABLE_PHRASE_CATEGORIES")
+            db.execSQL("DROP TABLE IF EXISTS $TABLE_REGIONS")
+            db.execSQL("DROP TABLE IF EXISTS $TABLE_COUNTRIES")
+            db.execSQL("DROP TABLE IF EXISTS $TABLE_DESTINATIONS")
+            onCreate(db)
+        } else if (oldVersion == 6) {
+            // 버전 6 -> 7 업데이트 시: 기존 데이터 삭제 없이 새로운 컬럼만 추가 (앱 크래시 방지)
+            try {
+                db.execSQL("ALTER TABLE $TABLE_REGIONS ADD COLUMN $COLUMN_WEATHER_REGION TEXT DEFAULT ''")
+                Log.d("DatabaseHelper", "Successfully upgraded DB to version 7 without data loss.")
+            } catch (e: Exception) {
+                Log.e("DatabaseHelper", "Failed to add column during upgrade", e)
+            }
+        }
     }
 
     override fun onOpen(db: SQLiteDatabase) {
@@ -118,21 +134,43 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         this.writableDatabase.update(TABLE_COUNTRIES, ContentValues().apply { put(if (isBasic) COLUMN_BASIC_INFO else COLUMN_USEFUL_INFO, info) }, "$COLUMN_ID = ?", arrayOf(countryId.toString()))
     }
 
-    // --- Regions CRUD (지역ID 추가됨) ---
-    fun insertRegion(name: String, code: String, countryId: Int) {
-        this.writableDatabase.insert(TABLE_REGIONS, null, ContentValues().apply { put(COLUMN_REGION_NAME, name); put(COLUMN_REGION_CODE, code); put(COLUMN_COUNTRY_ID, countryId) })
+    // --- Regions CRUD (지역ID 및 날씨용 지역명 추가됨) ---
+
+    // [신규] 관리하기 쉬운 데이터 클래스 도입.
+    // 하위 호환성(기존 MainActivity 소스에서 it.first 등의 호출을 지원)을 위해 프로퍼티 추가
+    data class RegionItem(val id: Int, val name: String, val code: String, val weatherName: String) {
+        val first: Int get() = id
+        val second: String get() = name
+        val third: String get() = code
     }
-    fun getRegionsByCountry(countryId: Int): List<Triple<Int, String, String>> {
-        val list = mutableListOf<Triple<Int, String, String>>()
-        // ID, 이름, 지역ID(코드) 3가지를 반환
-        this.readableDatabase.rawQuery("SELECT $COLUMN_ID, $COLUMN_REGION_NAME, $COLUMN_REGION_CODE FROM $TABLE_REGIONS WHERE $COLUMN_COUNTRY_ID = ?", arrayOf(countryId.toString())).use {
-            if (it.moveToFirst()) do { list.add(Triple(it.getInt(0), it.getString(1), it.getString(2) ?: "")) } while (it.moveToNext())
+
+    fun insertRegion(name: String, code: String, weatherName: String, countryId: Int) {
+        this.writableDatabase.insert(TABLE_REGIONS, null, ContentValues().apply {
+            put(COLUMN_REGION_NAME, name)
+            put(COLUMN_REGION_CODE, code)
+            put(COLUMN_WEATHER_REGION, weatherName)
+            put(COLUMN_COUNTRY_ID, countryId)
+        })
+    }
+
+    fun getRegionsByCountry(countryId: Int): List<RegionItem> {
+        val list = mutableListOf<RegionItem>()
+        this.readableDatabase.rawQuery("SELECT $COLUMN_ID, $COLUMN_REGION_NAME, $COLUMN_REGION_CODE, $COLUMN_WEATHER_REGION FROM $TABLE_REGIONS WHERE $COLUMN_COUNTRY_ID = ?", arrayOf(countryId.toString())).use {
+            if (it.moveToFirst()) do {
+                list.add(RegionItem(it.getInt(0), it.getString(1), it.getString(2) ?: "", it.getString(3) ?: ""))
+            } while (it.moveToNext())
         }
         return list
     }
-    fun updateRegion(id: Int, newName: String, newCode: String) {
-        this.writableDatabase.update(TABLE_REGIONS, ContentValues().apply { put(COLUMN_REGION_NAME, newName); put(COLUMN_REGION_CODE, newCode) }, "$COLUMN_ID = ?", arrayOf(id.toString()))
+
+    fun updateRegion(id: Int, newName: String, newCode: String, newWeatherName: String) {
+        this.writableDatabase.update(TABLE_REGIONS, ContentValues().apply {
+            put(COLUMN_REGION_NAME, newName)
+            put(COLUMN_REGION_CODE, newCode)
+            put(COLUMN_WEATHER_REGION, newWeatherName)
+        }, "$COLUMN_ID = ?", arrayOf(id.toString()))
     }
+
     fun deleteRegion(id: Int) {
         this.writableDatabase.delete(TABLE_REGIONS, "$COLUMN_ID = ?", arrayOf(id.toString()))
     }
@@ -144,6 +182,7 @@ class DatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME
         }
         return data
     }
+
     fun updateRegionData(regionId: Int, jsonData: String) {
         this.writableDatabase.update(TABLE_REGIONS, ContentValues().apply { put(COLUMN_REGION_DATA, jsonData) }, "$COLUMN_ID = ?", arrayOf(regionId.toString()))
     }
