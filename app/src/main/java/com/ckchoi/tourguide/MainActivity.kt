@@ -30,6 +30,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -52,6 +56,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -63,6 +68,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
@@ -104,7 +110,6 @@ import com.ckchoi.tourguide.ui.theme.TourGuideTheme
 // [0] 전역 설정 (Global Settings & SharedPreferences)
 // =========================================================================================
 
-/** 앱 전역에서 사용하는 폰트 사이즈 정의 */
 data class AppFontSize(
     val title: TextUnit = 22.sp,
     val menu: TextUnit = 18.sp,
@@ -114,7 +119,6 @@ data class AppFontSize(
 
 val LocalAppTypography = compositionLocalOf { AppFontSize() }
 
-/** 사용자 지정 폰트 크기를 로컬에 저장하고 불러오는 유틸리티 객체 */
 object FontPrefs {
     private const val PREFS_NAME = "font_settings"
     fun getSizes(ctx: Context): AppFontSize {
@@ -133,7 +137,6 @@ object FontPrefs {
     }
 }
 
-/** TTS(음성 안내) 엔진 종류 및 속도 설정을 로컬에 저장하는 객체 */
 object TtsPrefs {
     private const val PREFS_NAME = "tts_settings"
     fun getSpeed(ctx: Context) = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getFloat("speed", 1.0f)
@@ -149,7 +152,7 @@ object TtsPrefs {
 
 // =========================================================================================
 // [1] 데이터 모델 (Data Models)
-// - 앱 내의 모든 데이터 구조를 정의하며, DatabaseHelper를 통해 JSON 문자열로 변환되어 저장됨
+// - 주차장, 식당, 스팟 모델에 images, isMustVisit, isVisited 필드가 추가되었습니다.
 // =========================================================================================
 
 data class BasicInfoData(var headerMainTitle: String="", var headerSubTitle: String="", var headerBadge1: String="", var headerBadge2: String="", var summaries: List<SummaryBox> = emptyList(), var tipsSectionTitle: String="", var tipsSubDesc: String="", var tipBoxes: List<TipBox> = listOf(TipBox(), TipBox(), TipBox(), TipBox()), var routeSectionTitle: String="", var routeImageUri1: String="", var routeImageUri2: String="", var budgetLodging: String="0", var budgetTransport: String="0", var budgetFood: String="0", var budgetOther: String="0", var distanceLabels: String="", var distances: String="", var languages: List<String> = listOf("", "", ""), var currencies: List<String> = listOf("", "", ""), var exchangeRate1: String="1.0", var exchangeRate2: String="1.0", var exchangeRate3: String="1.0", var accountItems: List<AccountItem> = emptyList())
@@ -160,24 +163,21 @@ data class RegionDetailItem(val id: String=UUID.randomUUID().toString(), var tra
 data class AccommodationItem(val id: String=UUID.randomUUID().toString(), var name: String="", var address: String="", var contact: String="", var homepage: String="", var googleMapLink: String="", var parkingAvailable: String="", var roomType: String="", var price: String="", var roomDetails: String="", var checkInOutTime: String="", var otherInfo: String="", var attachedFiles: List<String> = emptyList())
 data class ScheduleItem(val id: String=UUID.randomUUID().toString(), var date: String="", var time: String="", var icon: String="", var content: String="", var details: String="", var precautions: String="")
 data class MapItem(val id: String=UUID.randomUUID().toString(), var routeDetails: String="", var googleMapLink: String="", var googleMapEmbedLink: String="")
-data class ParkingItem(val id: String=UUID.randomUUID().toString(), var name: String="", var address: String="", var googleMapLink: String="", var details: String="")
-data class SimpleItem(val id: String=UUID.randomUUID().toString(), var name: String="", var desc: String="", var googleMapLink: String="")
-data class RestaurantItem(val id: String=UUID.randomUUID().toString(), var name: String="", var desc: String="", var menu: String="", var googleMapLink: String="")
+data class ParkingItem(val id: String=UUID.randomUUID().toString(), var name: String="", var address: String="", var googleMapLink: String="", var details: String="", var images: List<String> = emptyList())
+data class SimpleItem(val id: String=UUID.randomUUID().toString(), var name: String="", var desc: String="", var googleMapLink: String="", var images: List<String> = emptyList(), var isMustVisit: Boolean = false, var isVisited: Boolean = false)
+data class RestaurantItem(val id: String=UUID.randomUUID().toString(), var name: String="", var desc: String="", var menu: String="", var googleMapLink: String="", var images: List<String> = emptyList(), var isMustVisit: Boolean = false, var isVisited: Boolean = false)
 data class GalleryItem(val id: String=UUID.randomUUID().toString(), var imageUri: String="", var desc: String="")
 data class AudioGuideItem(val id: String=UUID.randomUUID().toString(), var sequence: Int=0, var attraction: String="", var title: String="", var details: String="", var imageUri: String="")
 data class WeatherCacheData(var syncTime: String="", var currentTemp: String="", var weatherCode: Int=0, var rainProb: String="", var pm10: String="", var pm25: String="", var uvIndex: String="", var hourly: List<HourlyWeather> = emptyList(), var daily: List<DailyWeather> = emptyList())
 data class HourlyWeather(var time: String="", var temp: String="", var code: Int=0, var rainProb: String="")
 data class DailyWeather(var date: String="", var fullDate: String="", var minTemp: String="", var maxTemp: String="", var code: Int=0, var sunrise: String="", var sunset: String="", var moonrise: String="", var moonset: String="")
 data class RegionData(var detail: RegionDetailItem=RegionDetailItem(), var accommodation: AccommodationItem=AccommodationItem(), var schedules: List<ScheduleItem> = emptyList(), var routes: List<MapItem> = emptyList(), var attractions: List<MapItem> = emptyList(), var restaurantMaps: List<MapItem> = emptyList(), var parkings: List<ParkingItem> = emptyList(), var foods: List<SimpleItem> = emptyList(), var restaurants: List<RestaurantItem> = emptyList(), var cheapRestaurants: List<RestaurantItem> = emptyList(), var spots: List<SimpleItem> = emptyList(), var galleries: List<GalleryItem> = emptyList(), var audioAttractions: List<String> = emptyList(), var audioGuides: List<AudioGuideItem> = emptyList(), var weatherCache: String="", var usefulInfo: String="")
-
 val gson = Gson()
-
 
 // =========================================================================================
 // [2] 통신 및 파싱 유틸리티 (API Helpers & Parsers)
 // =========================================================================================
 
-/** Google Translate 비공식 API를 사용한 텍스트 자동 번역 (백그라운드 스레드에서 안전하게 실행) */
 suspend fun translateText(text: String, targetLangCode: String): String = withContext(Dispatchers.IO) {
     if (text.isBlank() || targetLangCode.isBlank()) return@withContext ""
     try {
@@ -200,7 +200,6 @@ suspend fun translateText(text: String, targetLangCode: String): String = withCo
     }
 }
 
-/** 데이터 리스트를 HTML <li> 태그 문자열로 변환 (양방향 동기화용) */
 fun generateRestaurantHtml(items: List<RestaurantItem>): String {
     if (items.isEmpty()) return ""
     return items.joinToString("\n") { item ->
@@ -208,8 +207,8 @@ fun generateRestaurantHtml(items: List<RestaurantItem>): String {
     }
 }
 
-/** HTML <li> 태그 문자열을 정규식으로 파싱하여 식당 객체 리스트로 변환 */
-fun parseRestaurantHtml(html: String): List<RestaurantItem> {
+/** HTML 파싱 시 기존에 설정된 이미지와 방문 상태(MustVisit, Visited)를 유지하도록 oldItems를 받아와 병합합니다. */
+fun parseRestaurantHtml(html: String, oldItems: List<RestaurantItem>): List<RestaurantItem> {
     val items = mutableListOf<RestaurantItem>()
     val liRegex = Regex("<li>(.*?)</li>", RegexOption.IGNORE_CASE)
     val nameRegex = Regex("<strong>(.*?)</strong>|<b[^>]*>(.*?)</b>", RegexOption.IGNORE_CASE)
@@ -223,7 +222,6 @@ fun parseRestaurantHtml(html: String): List<RestaurantItem> {
         val link = linkRegex.find(innerHtml)?.groupValues?.get(1)?.trim() ?: ""
         val menu = menuRegex.find(innerHtml)?.groupValues?.get(1)?.trim() ?: ""
 
-        // 이름, 지도 링크, 메뉴 키워드를 제외한 나머지 텍스트를 설명(desc)으로 간주
         var desc = innerHtml.replace(nameRegex, "")
             .replace(Regex("<a[^>]*>.*?</a>", RegexOption.IGNORE_CASE), "")
             .replace(Regex("메뉴:\\s*.*?(?=\\s*-|\\s*<|$)", RegexOption.IGNORE_CASE), "")
@@ -231,12 +229,16 @@ fun parseRestaurantHtml(html: String): List<RestaurantItem> {
             .replace("-", "")
             .trim()
 
-        items.add(RestaurantItem(id = UUID.randomUUID().toString(), name = name, desc = desc, menu = menu, googleMapLink = link))
+        val oldItem = oldItems.find { it.name == name }
+        if (oldItem != null) {
+            items.add(RestaurantItem(id = oldItem.id, name = name, desc = desc, menu = menu, googleMapLink = link, images = oldItem.images, isMustVisit = oldItem.isMustVisit, isVisited = oldItem.isVisited))
+        } else {
+            items.add(RestaurantItem(id = UUID.randomUUID().toString(), name = name, desc = desc, menu = menu, googleMapLink = link))
+        }
     }
     return items
 }
 
-/** 일반 항목 데이터 리스트를 HTML <li> 태그 문자열로 변환 */
 fun generateSimpleHtml(items: List<SimpleItem>): String {
     if (items.isEmpty()) return ""
     return items.joinToString("\n") { item ->
@@ -244,8 +246,8 @@ fun generateSimpleHtml(items: List<SimpleItem>): String {
     }
 }
 
-/** HTML <li> 태그 문자열을 정규식으로 파싱하여 일반 항목 객체 리스트로 변환 */
-fun parseSimpleHtml(html: String): List<SimpleItem> {
+/** HTML 파싱 시 기존에 설정된 이미지와 방문 상태(MustVisit, Visited)를 유지하도록 oldItems를 받아와 병합합니다. */
+fun parseSimpleHtml(html: String, oldItems: List<SimpleItem>): List<SimpleItem> {
     val items = mutableListOf<SimpleItem>()
     val liRegex = Regex("<li>(.*?)</li>", RegexOption.IGNORE_CASE)
     val nameRegex = Regex("<strong>(.*?)</strong>|<b[^>]*>(.*?)</b>", RegexOption.IGNORE_CASE)
@@ -263,14 +265,20 @@ fun parseSimpleHtml(html: String): List<SimpleItem> {
             .replace("-", "")
             .trim()
 
-        items.add(SimpleItem(id = UUID.randomUUID().toString(), name = name, desc = desc, googleMapLink = link))
+        val oldItem = oldItems.find { it.name == name }
+        if (oldItem != null) {
+            items.add(SimpleItem(id = oldItem.id, name = name, desc = desc, googleMapLink = link, images = oldItem.images, isMustVisit = oldItem.isMustVisit, isVisited = oldItem.isVisited))
+        } else {
+            items.add(SimpleItem(id = UUID.randomUUID().toString(), name = name, desc = desc, googleMapLink = link))
+        }
     }
     return items
 }
 // =========================================================================================
 // [3] 일반 유틸리티 (General Utilities)
-// - 숫자 변환, 파일 저장, 이모지 반환 등의 공통 함수 모음
+// - 숫자 변환, 파일 저장, 날씨/위상 계산 등의 공통 함수 모음
 // =========================================================================================
+
 fun parseSafeFloat(input: String): Float = input.replace(Regex("[^0-9.\\-]"), "").toFloatOrNull() ?: 0f
 fun formatCurrency(amount: Float): String = java.text.DecimalFormat("#,##0.##").format(amount)
 fun cleanForTts(text: String): String = text.replace(Regex("[^\\p{L}\\p{Nd}\\s.,!?]"), " ")
@@ -336,7 +344,7 @@ fun getMoonPhaseEmoji(dateStr: String): String {
     } catch(e: Exception) { "🌕" }
 }
 
-/** API 400 에러를 방지하기 위해 일출/일몰 시간과 달의 위상을 조합하여 근사치로 월출/월몰 시간을 계산합니다. */
+/** 일출/일몰 시간과 달의 위상을 조합하여 근사치로 월출/월몰 시간을 계산합니다. */
 fun getApproxMoonTime(sunTime: String, dateStr: String): String {
     if (sunTime.isBlank()) return ""
     return try {
@@ -474,14 +482,105 @@ fun UriImage(uriString: String, modifier: Modifier = Modifier, contentScale: Con
     else Box(modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) { Text("이미지 없음", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = LocalAppTypography.current.small) }
 }
 
-/** 이미지를 클릭했을 때 전체화면으로 띄워주고 핀치 줌을 지원하는 뷰어 */
+/** * [수정됨] 갤러리처럼 여러 장의 이미지를 스와이프하며 넘겨보고 핀치 줌을 지원하는 뷰어입니다.
+ * 줌 인 상태에서는 드래그 시 패닝(이동)이 작동하고 빈 화면으로 밀리지 않습니다.
+ * 줌 아웃(1배율) 상태에서는 제스처를 패스하여 자연스럽게 다음/이전 사진으로 넘어갑니다.
+ */
 @Composable
-fun FullScreenImageViewer(uri: String, onClose: () -> Unit) {
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black).zIndex(100f).pointerInput(Unit) { detectTapGestures(onDoubleTap = { onClose() }) }) {
-        UriImage(uriString = uri, modifier = Modifier.fillMaxSize().pointerInput(Unit) { detectTransformGestures { _, pan, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 5f); offset += pan } }.graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y), contentScale = ContentScale.Fit)
-        IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(50))) { Text("X", color = Color.White, fontWeight = FontWeight.Bold) }
+fun FullScreenImageViewer(imageUris: List<String>, initialIndex: Int, onClose: () -> Unit) {
+    val pagerState = rememberPagerState(initialPage = initialIndex) { imageUris.size }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .zIndex(100f)
+    ) {
+        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+            var scale by remember { mutableFloatStateOf(1f) }
+            var offset by remember { mutableStateOf(Offset.Zero) }
+
+            // 페이지 전환 시 확대 상태와 위치를 1배율 정중앙으로 초기화
+            LaunchedEffect(pagerState.currentPage) {
+                if (pagerState.currentPage != page) {
+                    scale = 1f
+                    offset = Offset.Zero
+                }
+            }
+
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                UriImage(
+                    uriString = imageUris[page],
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            // 더블 탭 시 1배율 초기화 기능
+                            detectTapGestures(
+                                onDoubleTap = {
+                                    scale = 1f
+                                    offset = Offset.Zero
+                                }
+                            )
+                        }
+                        .pointerInput(Unit) {
+                            // 커스텀 제스처: 줌 인(확대) 상태에서만 패닝 이벤트를 소비하고, 1배율일 때는 Pager가 스와이프되도록 무시합니다.
+                            awaitEachGesture {
+                                awaitFirstDown()
+                                do {
+                                    val event = awaitPointerEvent()
+                                    val zoomChange = event.calculateZoom()
+                                    val panChange = event.calculatePan()
+
+                                    // 확대 축소 시도 또는 이미 확대된 상태인 경우
+                                    if (zoomChange != 1f || scale > 1f) {
+                                        scale = (scale * zoomChange).coerceIn(1f, 5f)
+
+                                        // 빈 화면으로 과도하게 이미지가 밀리는 현상 방지 (경계값 계산)
+                                        val maxX = (size.width * (scale - 1)) / 2
+                                        val maxY = (size.height * (scale - 1)) / 2
+
+                                        if (scale > 1f) {
+                                            offset = Offset(
+                                                x = (offset.x + panChange.x).coerceIn(-maxX, maxX),
+                                                y = (offset.y + panChange.y).coerceIn(-maxY, maxY)
+                                            )
+                                        } else {
+                                            offset = Offset.Zero
+                                        }
+
+                                        // 이벤트 소비 (Pager로 스와이프 이벤트가 넘어가지 못하게 막음)
+                                        event.changes.forEach { if (it.positionChanged()) it.consume() }
+                                    }
+                                } while (event.changes.any { it.pressed })
+                            }
+                        }
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y
+                        ),
+                    contentScale = ContentScale.Fit
+                )
+            }
+        }
+
+        // 닫기 버튼 및 상단 이미지 인디케이터 (현재 / 전체)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("${pagerState.currentPage + 1} / ${imageUris.size}", color = Color.White, fontSize = LocalAppTypography.current.menu, fontWeight = FontWeight.Bold)
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(50))
+            ) {
+                Text("X", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 
@@ -512,7 +611,10 @@ fun TourGuideApp() {
     var userRegionTabIndex by remember { mutableIntStateOf(0) }
     var adminRegionTabIndex by remember { mutableIntStateOf(0) }
     var userSelectedAttraction by remember { mutableStateOf<String?>(null) }
-    var fullScreenImageUri by remember { mutableStateOf<String?>(null) }
+
+    // 다중 이미지를 보여주기 위한 갤러리 라우팅 상태
+    var fullScreenImageUris by remember { mutableStateOf<List<String>?>(null) }
+    var fullScreenImageIndex by remember { mutableIntStateOf(0) }
 
     val dbHelper = remember { DatabaseHelper(context) }
     val ttsManager = remember { TtsManager(context) }
@@ -520,7 +622,7 @@ fun TourGuideApp() {
 
     // 안드로이드 물리적 뒤로가기 버튼에 대한 커스텀 네비게이션 제어
     BackHandler {
-        if (fullScreenImageUri != null) fullScreenImageUri = null
+        if (fullScreenImageUris != null) fullScreenImageUris = null
         else if (currentScreen == "지역 사용자 화면" && userRegionTabIndex == 12 && userSelectedAttraction != null) userSelectedAttraction = null
         else if (currentScreen == "홈메인") {
             if (System.currentTimeMillis() - backPressedTime < 2000) { ttsManager.shutdown(); (context as? Activity)?.finishAffinity() }
@@ -555,17 +657,20 @@ fun TourGuideApp() {
                     // currentScreen 상태에 맞추어 각각의 컴포저블 화면을 매핑
                     when (currentScreen) {
                         "홈메인" -> HomeScreen(dbHelper) { id, name -> selectedCountryId=id; selectedCountryName=name; userCountryTabIndex=0; currentScreen="국가 사용자 화면" }
-                        "국가 사용자 화면" -> CountryUserScreen(dbHelper, selectedCountryId?:0, userCountryTabIndex, {userCountryTabIndex=it}, { id, name -> selectedRegionId=id; selectedRegionName=name; userRegionTabIndex=0; userSelectedAttraction=null; currentScreen="지역 사용자 화면" }, {fullScreenImageUri=it}, ttsManager)
-                        "지역 사용자 화면" -> RegionUserScreen(dbHelper, selectedRegionId?:0, userRegionTabIndex, {userRegionTabIndex=it}, userSelectedAttraction, {userSelectedAttraction=it}, {fullScreenImageUri=it}, { currentScreen="오디오 가이드 상세"; selectedAudioGuideId=it })
-                        "오디오 가이드 상세" -> selectedAudioGuideId?.let { AudioGuideDetailScreen(dbHelper, selectedCountryId?:0, selectedRegionId?:0, it, ttsManager, { uri -> fullScreenImageUri=uri }, { newId -> selectedAudioGuideId=newId }) }
+                        "국가 사용자 화면" -> CountryUserScreen(dbHelper, selectedCountryId?:0, userCountryTabIndex, {userCountryTabIndex=it}, { id, name -> selectedRegionId=id; selectedRegionName=name; userRegionTabIndex=0; userSelectedAttraction=null; currentScreen="지역 사용자 화면" }, { uri -> fullScreenImageUris = listOf(uri); fullScreenImageIndex = 0 }, ttsManager)
+                        "지역 사용자 화면" -> RegionUserScreen(dbHelper, selectedRegionId?:0, userRegionTabIndex, {userRegionTabIndex=it}, userSelectedAttraction, {userSelectedAttraction=it}, { uri -> fullScreenImageUris = listOf(uri); fullScreenImageIndex = 0 }, { uris, idx -> fullScreenImageUris = uris; fullScreenImageIndex = idx }, { currentScreen="오디오 가이드 상세"; selectedAudioGuideId=it })
+                        "오디오 가이드 상세" -> selectedAudioGuideId?.let { AudioGuideDetailScreen(dbHelper, selectedCountryId?:0, selectedRegionId?:0, it, ttsManager, { uri -> fullScreenImageUris = listOf(uri); fullScreenImageIndex = 0 }, { newId -> selectedAudioGuideId=newId }) }
                         "앱설정" -> SettingsScreen(dbHelper, ttsManager, { route -> currentScreen=route }, {appTypography=FontPrefs.getSizes(context)})
                         "여행지 설정" -> CountrySettingScreen(dbHelper, { id, name -> selectedCountryId=id; selectedCountryName=name; adminCountryTabIndex=0; currentScreen="국가 상세" }, {currentScreen="홈메인"})
                         "국가 상세" -> CountryDetailScreen(dbHelper, selectedCountryId?:0, adminCountryTabIndex, {adminCountryTabIndex=it}, { id, name -> selectedRegionId=id; selectedRegionName=name; adminRegionTabIndex=0; currentScreen="지역 상세" })
-                        "지역 상세" -> RegionDetailScreen(dbHelper, countryId=selectedCountryId?:0, regionId=selectedRegionId?:0, selectedTabIndex=adminRegionTabIndex, onTabSelected={adminRegionTabIndex=it}, onShowImage={ uri -> fullScreenImageUri=uri })
+                        "지역 상세" -> RegionDetailScreen(dbHelper, countryId=selectedCountryId?:0, regionId=selectedRegionId?:0, selectedTabIndex=adminRegionTabIndex, onTabSelected={adminRegionTabIndex=it}, onShowImage={ uri -> fullScreenImageUris = listOf(uri); fullScreenImageIndex = 0 }, onShowMultiImage={ uris, idx -> fullScreenImageUris = uris; fullScreenImageIndex = idx })
                     }
                 }
             }
-            fullScreenImageUri?.let { FullScreenImageViewer(uri = it, onClose = { fullScreenImageUri = null }) }
+            // 전체 화면 갤러리 이미지 뷰어 호출 (리스트 형태로 전달하여 스와이프를 지원)
+            fullScreenImageUris?.let { uris ->
+                FullScreenImageViewer(imageUris = uris, initialIndex = fullScreenImageIndex, onClose = { fullScreenImageUris = null })
+            }
         }
     }
 }
@@ -650,8 +755,9 @@ fun CountryUserScreen(
             pagerState.scrollToPage(selectedTabIndex)
         }
     }
-    LaunchedEffect(pagerState.currentPage) {
-        onTabSelected(pagerState.currentPage)
+    // [수정됨] 애니메이션 도중 멈추는 버그 방지를 위해 settledPage 사용
+    LaunchedEffect(pagerState.settledPage) {
+        onTabSelected(pagerState.settledPage)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -677,7 +783,8 @@ fun CountryUserScreen(
     }
 }
 
-/** * [국가 탭 1] 기본정보
+/**
+ * [국가 탭 1] 기본정보
  * 국가의 핵심 요약, 팁, 여행 루트 이미지, 예산(파이차트), 거리(막대차트)를 보여줍니다.
  */
 @Composable
@@ -926,7 +1033,7 @@ fun DistanceVisualizerSection(data: BasicInfoData) {
     val labels = data.distanceLabels.split(Regex("[,，]")).map { it.trim() }.filter { it.isNotBlank() }
     val values = data.distances.split(Regex("[,，]")).map { parseSafeFloat(it) }
 
-    // 데이터가 하나도 입력되지 않았다면 차트 영역 전체를 숨김
+    // [수정됨] 데이터가 하나도 입력되지 않았다면 차트 영역 전체를 숨김
     if (labels.isEmpty() || values.isEmpty()) {
         return
     }
@@ -1510,7 +1617,7 @@ fun UserRegionTab(dbHelper: DatabaseHelper, countryId: Int, onRegionClick: (Int,
 
 /**
  * [국가 탭 4] 회화표현
- * 카테고리별 다국어 회화표현을 리스트로 제공하며, 클릭 시 선택된 TTS 엔진으로 텍스트를 읽어줍니다.
+ * 다국어 회화표현을 리스트로 제공하며, 클릭 시 TTS 엔진으로 텍스트를 읽어줍니다.
  */
 @Composable
 fun UserPhraseTab(dbHelper: DatabaseHelper, countryId: Int, ttsManager: TtsManager) {
@@ -1530,14 +1637,10 @@ fun UserPhraseTab(dbHelper: DatabaseHelper, countryId: Int, ttsManager: TtsManag
     var selectedLang2Voice by remember { mutableStateOf<VoiceWrapper?>(null) }
     var selectedLang3Voice by remember { mutableStateOf<VoiceWrapper?>(null) }
 
-    // 설정된 TTS 목소리 로드 (3개 언어 모두 동기화)
     LaunchedEffect(ttsManager.ttsEngines, lang1Tag, lang2Tag, lang3Tag) {
         withContext(Dispatchers.IO) {
             var waitCount = 0
-            while (ttsManager.ttsEngines.isEmpty() && waitCount < 20) {
-                delay(100)
-                waitCount++
-            }
+            while (ttsManager.ttsEngines.isEmpty() && waitCount < 20) { delay(100); waitCount++ }
             val v1 = ttsManager.getAvailableVoices(Locale.forLanguageTag(lang1Tag))
             val v2 = ttsManager.getAvailableVoices(Locale.forLanguageTag(lang2Tag))
             val v3 = ttsManager.getAvailableVoices(Locale.forLanguageTag(lang3Tag))
@@ -1560,36 +1663,25 @@ fun UserPhraseTab(dbHelper: DatabaseHelper, countryId: Int, ttsManager: TtsManag
             1 -> {
                 val tts = ttsManager.ttsEngines[selectedLang1Voice?.enginePackage] ?: ttsManager.tts
                 tts?.setSpeechRate(speed)
-                if (selectedLang1Voice != null) tts?.voice = selectedLang1Voice!!.voice
-                else tts?.language = getTtsLocale(lang1Tag)
+                if (selectedLang1Voice != null) tts?.voice = selectedLang1Voice!!.voice else tts?.language = getTtsLocale(lang1Tag)
                 tts?.speak(cleanForTts(text), TextToSpeech.QUEUE_FLUSH, null, null)
             }
             2 -> {
                 val tts = ttsManager.ttsEngines[selectedLang2Voice?.enginePackage] ?: ttsManager.tts
                 tts?.setSpeechRate(speed)
-                if (selectedLang2Voice != null) tts?.voice = selectedLang2Voice!!.voice
-                else tts?.language = getTtsLocale(lang2Tag)
+                if (selectedLang2Voice != null) tts?.voice = selectedLang2Voice!!.voice else tts?.language = getTtsLocale(lang2Tag)
                 tts?.speak(cleanForTts(text), TextToSpeech.QUEUE_FLUSH, null, null)
             }
             3 -> {
                 val loc = getTtsLocale(lang3Tag)
                 val tts = ttsManager.ttsEngines[selectedLang3Voice?.enginePackage] ?: ttsManager.tts
                 tts?.setSpeechRate(speed)
-
                 if (selectedLang3Voice != null) {
                     tts?.voice = selectedLang3Voice!!.voice
                 } else {
-                    // 3번째 언어의 기본 보이스를 찾기 위한 유연한 조건
                     val availableVoices = try { tts?.voices } catch(e: Exception) { null }
-                    val targetVoice = availableVoices?.find { it.locale.language == loc.language && !it.isNetworkConnectionRequired }
-                        ?: availableVoices?.find { it.locale.language == loc.language }
-                        ?: availableVoices?.find { it.locale.language.contains(loc.language) }
-
-                    if (targetVoice != null) {
-                        tts?.voice = targetVoice
-                    } else {
-                        tts?.language = loc
-                    }
+                    val targetVoice = availableVoices?.find { it.locale.language == loc.language && !it.isNetworkConnectionRequired } ?: availableVoices?.find { it.locale.language == loc.language } ?: availableVoices?.find { it.locale.language.contains(loc.language) }
+                    if (targetVoice != null) tts?.voice = targetVoice else tts?.language = loc
                 }
                 tts?.speak(cleanForTts(text), TextToSpeech.QUEUE_FLUSH, null, null)
             }
@@ -1606,10 +1698,7 @@ fun UserPhraseTab(dbHelper: DatabaseHelper, countryId: Int, ttsManager: TtsManag
                 val isSelected = selectedCategoryId == id
                 Button(
                     onClick = { selectedCategoryId = id },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
-                        contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer
-                    ),
+                    colors = ButtonDefaults.buttonColors(containerColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer),
                     modifier = Modifier.padding(end = 8.dp)
                 ) { Text(name, fontSize = LocalAppTypography.current.body) }
             }
@@ -1627,37 +1716,20 @@ fun UserPhraseTab(dbHelper: DatabaseHelper, countryId: Int, ttsManager: TtsManag
                         Card(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 if (phrase.expr1.isNotBlank()) {
-                                    Text(
-                                        phrase.expr1,
-                                        fontSize = LocalAppTypography.current.title,
-                                        fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.clickable { playTts(phrase.expr1, 1) }
-                                    )
+                                    Text(phrase.expr1, fontSize = LocalAppTypography.current.title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, modifier = Modifier.clickable { playTts(phrase.expr1, 1) })
                                 }
                                 if (phrase.meaning.isNotBlank()) {
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(phrase.meaning, color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body)
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
-
                                 if (phrase.expr2.isNotBlank()) {
                                     val label1 = try { Locale.forLanguageTag(lang2Tag).displayName } catch(e:Exception){lang2Tag}
-                                    Text(
-                                        "${label1}: ${phrase.expr2}",
-                                        fontSize = LocalAppTypography.current.menu,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.clickable { playTts(phrase.expr2, 2) }.padding(vertical=4.dp)
-                                    )
+                                    Text("${label1}: ${phrase.expr2}", fontSize = LocalAppTypography.current.menu, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.clickable { playTts(phrase.expr2, 2) }.padding(vertical=4.dp))
                                 }
                                 if (phrase.expr3.isNotBlank()) {
                                     val label2 = try { Locale.forLanguageTag(lang3Tag).displayName } catch(e:Exception){lang3Tag}
-                                    Text(
-                                        "${label2}: ${phrase.expr3}",
-                                        fontSize = LocalAppTypography.current.menu,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.clickable { playTts(phrase.expr3, 3) }.padding(vertical=4.dp)
-                                    )
+                                    Text("${label2}: ${phrase.expr3}", fontSize = LocalAppTypography.current.menu, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.clickable { playTts(phrase.expr3, 3) }.padding(vertical=4.dp))
                                 }
                             }
                         }
@@ -1670,7 +1742,7 @@ fun UserPhraseTab(dbHelper: DatabaseHelper, countryId: Int, ttsManager: TtsManag
 
 /**
  * [국가 탭 5] 유용한 정보
- * 텍스트 롱클릭 시 자유롭게 영역을 선택하여 복사할 수 있도록 SelectionContainer로 텍스트를 감쌉니다.
+ * SelectionContainer를 통해 자유롭게 텍스트를 선택 및 복사할 수 있습니다.
  */
 @Composable
 fun UserUsefulInfoTab(dbHelper: DatabaseHelper, countryId: Int) {
@@ -1681,6 +1753,26 @@ fun UserUsefulInfoTab(dbHelper: DatabaseHelper, countryId: Int) {
         } else {
             SelectionContainer {
                 Text(text, fontSize = LocalAppTypography.current.body, modifier = Modifier.verticalScroll(rememberScrollState()), color = MaterialTheme.colorScheme.onBackground)
+            }
+        }
+    }
+}
+
+/**
+ * 다중 이미지를 가로 스크롤로 보여주는 공통 썸네일 컴포저블
+ * 클릭 시 선택한 이미지의 전체 목록과 시작 인덱스를 콜백으로 전달합니다.
+ */
+@Composable
+fun ThumbnailRow(images: List<String>, onShowMultiImage: (List<String>, Int) -> Unit) {
+    if (images.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            images.forEachIndexed { index, uri ->
+                UriImage(
+                    uriString = uri,
+                    modifier = Modifier.size(80.dp).clip(RoundedCornerShape(8.dp)).clickable { onShowMultiImage(images, index) }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
             }
         }
     }
@@ -1699,6 +1791,7 @@ fun RegionUserScreen(
     selectedAttraction: String?,
     onAttractionSelected: (String?) -> Unit,
     onShowImage: (String) -> Unit,
+    onShowMultiImage: (List<String>, Int) -> Unit,
     onAudioGuideClick: (String) -> Unit
 ) {
     val tabs = listOf("상세정보", "주요일정", "숙소정보", "이동경로/지도", "여행지/지도", "맛집/지도", "주차장정보", "먹거리/기념품", "맛집정보", "가성비맛집", "추천스팟", "갤러리", "오디오가이드", "유용한정보")
@@ -1707,40 +1800,27 @@ fun RegionUserScreen(
     val savedJson = dbHelper.getRegionData(regionId)
     val regionData = try { if (savedJson.isNotEmpty()) gson.fromJson(savedJson, RegionData::class.java) ?: RegionData() else RegionData() } catch (e: Exception) { RegionData() }
 
-    LaunchedEffect(selectedTabIndex) {
-        if (pagerState.currentPage != selectedTabIndex) {
-            pagerState.scrollToPage(selectedTabIndex)
-        }
-    }
-    LaunchedEffect(pagerState.currentPage) {
-        if (selectedTabIndex != pagerState.currentPage) onTabSelected(pagerState.currentPage)
-    }
+    LaunchedEffect(selectedTabIndex) { if (pagerState.currentPage != selectedTabIndex) pagerState.scrollToPage(selectedTabIndex) }
+    LaunchedEffect(pagerState.settledPage) { if (selectedTabIndex != pagerState.settledPage) onTabSelected(pagerState.settledPage) }
 
-    Column(modifier = Modifier.fillMaxSize().background(Color(0xFFFCF9F2))) {
+    // [다크모드 수정] 고정 색상 대신 MaterialTheme.colorScheme.background 사용
+    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         ScrollableTabRow(selectedTabIndex = pagerState.currentPage, edgePadding = 8.dp) {
-            tabs.forEachIndexed { index, title ->
-                Tab(
-                    selected = pagerState.currentPage == index,
-                    onClick = { coroutineScope.launch { pagerState.animateScrollToPage(index) } },
-                    text = { Text(title, fontSize = LocalAppTypography.current.body) }
-                )
-            }
+            tabs.forEachIndexed { index, title -> Tab(selected = pagerState.currentPage == index, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(index) } }, text = { Text(title, fontSize = LocalAppTypography.current.body) }) }
         }
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.Top) { page ->
             when (page) {
                 0 -> {
                     val item = regionData.detail
                     if (item.travelDates.isBlank() && item.stayDuration.isBlank() && item.summary.isBlank() && item.tips.isBlank()) {
-                        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                            Text("등록된 상세정보가 없습니다.", color = Color.Gray, fontSize = LocalAppTypography.current.body)
-                        }
+                        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) { Text("등록된 상세정보가 없습니다.", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = LocalAppTypography.current.body) }
                     } else {
-                        Card(Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(2.dp)) {
+                        Card(Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(2.dp)) {
                             Column(Modifier.padding(16.dp)) {
                                 if(item.travelDates.isNotBlank()) Text("일정: ${item.travelDates}", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = LocalAppTypography.current.body)
                                 if(item.stayDuration.isNotBlank()) Text("숙박: ${item.stayDuration}", fontSize = LocalAppTypography.current.body)
                                 if(item.summary.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text("요약: ${item.summary}", fontSize = LocalAppTypography.current.body) }
-                                if(item.tips.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text("팁: ${item.tips}", color = Color.Gray, fontSize = LocalAppTypography.current.body) }
+                                if(item.tips.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text("팁: ${item.tips}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = LocalAppTypography.current.body) }
                             }
                         }
                     }
@@ -1753,59 +1833,58 @@ fun RegionUserScreen(
                 2 -> {
                     val item = regionData.accommodation
                     if (item.name.isBlank() && item.address.isBlank()) {
-                        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-                            Text("등록된 숙소가 없습니다.", color = MaterialTheme.colorScheme.onBackground.copy(alpha=0.6f), fontSize = LocalAppTypography.current.body)
-                        }
+                        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) { Text("등록된 숙소가 없습니다.", color = MaterialTheme.colorScheme.onBackground.copy(alpha=0.6f), fontSize = LocalAppTypography.current.body) }
                     } else {
-                        Card(Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(2.dp)) {
-                            Column(Modifier.padding(16.dp)) {
-                                Text(item.name, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.menu, color = MaterialTheme.colorScheme.primary)
-                                val context = LocalContext.current
-                                Row(modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)) {
-                                    if(item.googleMapLink.isNotBlank()) {
-                                        Text("📍 구글맵 실행", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body, modifier = Modifier.clickable {
-                                            try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.googleMapLink))) } catch (e:Exception) {}
-                                        })
-                                        Spacer(modifier = Modifier.width(16.dp))
+                        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+                            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(2.dp)) {
+                                Column(Modifier.padding(16.dp)) {
+                                    Text(item.name, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.menu, color = MaterialTheme.colorScheme.primary)
+                                    val context = LocalContext.current
+                                    Row(modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)) {
+                                        if(item.googleMapLink.isNotBlank()) {
+                                            Text("📍 구글맵 실행", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body, modifier = Modifier.clickable { try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.googleMapLink))) } catch (e:Exception) {} })
+                                            Spacer(modifier = Modifier.width(16.dp))
+                                        }
+                                        if(item.homepage.isNotBlank()) {
+                                            Text("🌐 홈페이지 접속", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body, modifier = Modifier.clickable { try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.homepage))) } catch (e:Exception) {} })
+                                        }
                                     }
-                                    if(item.homepage.isNotBlank()) {
-                                        Text("🌐 홈페이지 접속", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body, modifier = Modifier.clickable {
-                                            try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.homepage))) } catch (e:Exception) {}
-                                        })
-                                    }
-                                }
-                                if(item.roomType.isNotBlank() || item.price.isNotBlank()) Text("${item.roomType} | ${item.price}", fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body)
-                                if(item.address.isNotBlank()) Text("주소: ${item.address}", fontSize = LocalAppTypography.current.body)
-                                if(item.contact.isNotBlank()) Text("연락처: ${item.contact}", fontSize = LocalAppTypography.current.body)
-                                if(item.checkInOutTime.isNotBlank()) Text("체크인/아웃: ${item.checkInOutTime}", fontSize = LocalAppTypography.current.body)
-                                if(item.parkingAvailable.isNotBlank()) Text("주차여부: ${item.parkingAvailable}", fontSize = LocalAppTypography.current.body)
-                                if(item.roomDetails.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text("룸 상세: ${item.roomDetails}", fontSize = LocalAppTypography.current.body) }
-                                if(item.otherInfo.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text("기타정보: ${item.otherInfo}", fontSize = LocalAppTypography.current.body) }
+                                    if(item.roomType.isNotBlank() || item.price.isNotBlank()) Text("${item.roomType} | ${item.price}", fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body)
+                                    if(item.address.isNotBlank()) Text("주소: ${item.address}", fontSize = LocalAppTypography.current.body)
+                                    if(item.contact.isNotBlank()) Text("연락처: ${item.contact}", fontSize = LocalAppTypography.current.body)
+                                    if(item.checkInOutTime.isNotBlank()) Text("체크인/아웃: ${item.checkInOutTime}", fontSize = LocalAppTypography.current.body)
+                                    if(item.parkingAvailable.isNotBlank()) Text("주차여부: ${item.parkingAvailable}", fontSize = LocalAppTypography.current.body)
+                                    if(item.roomDetails.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text("룸 상세: ${item.roomDetails}", fontSize = LocalAppTypography.current.body) }
+                                    if(item.otherInfo.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text("기타정보: ${item.otherInfo}", fontSize = LocalAppTypography.current.body) }
 
-                                if (item.attachedFiles.isNotEmpty()) {
-                                    Spacer(Modifier.height(16.dp))
-                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                    Spacer(Modifier.height(8.dp))
-                                    Text("첨부파일", fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.small, color = MaterialTheme.colorScheme.primary)
-                                    Spacer(Modifier.height(8.dp))
-                                    Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                                        item.attachedFiles.forEach { file ->
-                                            if (isImageFile(file)) {
-                                                UriImage(
-                                                    uriString = file,
-                                                    modifier = Modifier.size(80.dp).clip(RoundedCornerShape(8.dp)).clickable { onShowImage(file) }
-                                                )
-                                            } else {
-                                                val fileName = if (file.contains("_")) file.substringAfter("_") else file.substringAfterLast("/")
-                                                Card(modifier = Modifier.width(120.dp).height(80.dp).clickable { exportFileToDownloads(context, file) }, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                                                    Column(modifier = Modifier.fillMaxSize().padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                                                        Icon(Icons.Default.AttachFile, contentDescription = "파일", tint = MaterialTheme.colorScheme.onSecondaryContainer)
-                                                        Spacer(modifier = Modifier.height(4.dp))
-                                                        Text(fileName, fontSize = LocalAppTypography.current.small, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                                    if (item.attachedFiles.isNotEmpty()) {
+                                        val imageFiles = item.attachedFiles.filter { isImageFile(it) }
+                                        Spacer(Modifier.height(16.dp))
+                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                                        Spacer(Modifier.height(8.dp))
+                                        Text("첨부파일", fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.small, color = MaterialTheme.colorScheme.primary)
+                                        Spacer(Modifier.height(8.dp))
+                                        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                            item.attachedFiles.forEach { file ->
+                                                if (isImageFile(file)) {
+                                                    UriImage(
+                                                        uriString = file,
+                                                        modifier = Modifier.size(80.dp).clip(RoundedCornerShape(8.dp)).clickable {
+                                                            onShowMultiImage(imageFiles, imageFiles.indexOf(file).coerceAtLeast(0))
+                                                        }
+                                                    )
+                                                } else {
+                                                    val fileName = if (file.contains("_")) file.substringAfter("_") else file.substringAfterLast("/")
+                                                    Card(modifier = Modifier.width(120.dp).height(80.dp).clickable { exportFileToDownloads(context, file) }, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                                                        Column(modifier = Modifier.fillMaxSize().padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                                                            Icon(Icons.Default.AttachFile, contentDescription = "파일", tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                                                            Spacer(modifier = Modifier.height(4.dp))
+                                                            Text(fileName, fontSize = LocalAppTypography.current.small, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                                                        }
                                                     }
                                                 }
+                                                Spacer(Modifier.width(8.dp))
                                             }
-                                            Spacer(Modifier.width(8.dp))
                                         }
                                     }
                                 }
@@ -1816,34 +1895,27 @@ fun RegionUserScreen(
                 3 -> MapUserList(regionData.routes)
                 4 -> MapUserList(regionData.attractions)
                 5 -> MapUserList(regionData.restaurantMaps)
-                6 -> GenericUserList(regionData.parkings, "등록된 주차장이 없습니다.") { item ->
-                    val context = LocalContext.current
-                    Text(item.name, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = LocalAppTypography.current.body)
-                    if(item.googleMapLink.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text("📍 구글맵 실행", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body, modifier = Modifier.clickable {
-                            try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.googleMapLink))) } catch (e:Exception) {}
-                        })
-                    }
-                    Text(item.address, fontSize = LocalAppTypography.current.body)
-                    if(item.details.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text(item.details, fontSize = LocalAppTypography.current.body) }
-                }
-                7 -> SimpleUserList(regionData.foods)
-                8 -> RestaurantUserList(regionData.restaurants)
-                9 -> RestaurantUserList(regionData.cheapRestaurants)
-                10 -> SimpleUserList(regionData.spots)
-                11 -> GenericUserList(regionData.galleries, "등록된 사진이 없습니다.") { item ->
-                    if(item.imageUri.isNotBlank()) {
-                        UriImage(uriString = item.imageUri, modifier = Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(8.dp)).clickable { onShowImage(item.imageUri) })
-                    }
-                    if(item.desc.isNotBlank()) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(item.desc, fontSize = LocalAppTypography.current.body, fontWeight = FontWeight.Bold)
+                6 -> ParkingUserList(regionData.parkings, onShowMultiImage)
+                7 -> SimpleUserList(regionData.foods.sortedWith(compareByDescending<SimpleItem>{it.isVisited}.thenByDescending{it.isMustVisit}.thenBy{it.name}), onShowMultiImage)
+                8 -> RestaurantUserList(regionData.restaurants.sortedWith(compareByDescending<RestaurantItem>{it.isVisited}.thenByDescending{it.isMustVisit}.thenBy{it.name}), onShowMultiImage)
+                9 -> RestaurantUserList(regionData.cheapRestaurants.sortedWith(compareByDescending<RestaurantItem>{it.isVisited}.thenByDescending{it.isMustVisit}.thenBy{it.name}), onShowMultiImage)
+                10 -> SimpleUserList(regionData.spots.sortedWith(compareByDescending<SimpleItem>{it.isVisited}.thenByDescending{it.isMustVisit}.thenBy{it.name}), onShowMultiImage)
+                11 -> {
+                    val allGalleryUris = regionData.galleries.map { it.imageUri }.filter { it.isNotBlank() }
+                    GenericUserList(regionData.galleries, "등록된 사진이 없습니다.") { item ->
+                        if(item.imageUri.isNotBlank()) {
+                            UriImage(
+                                uriString = item.imageUri,
+                                modifier = Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(8.dp)).clickable {
+                                    onShowMultiImage(allGalleryUris, allGalleryUris.indexOf(item.imageUri).coerceAtLeast(0))
+                                }
+                            )
+                        }
+                        if(item.desc.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(item.desc, fontSize = LocalAppTypography.current.body, fontWeight = FontWeight.Bold) }
                     }
                 }
                 12 -> AudioGuideUserList(items = regionData.audioGuides, selectedAttraction = selectedAttraction, onAttractionSelected = onAttractionSelected, onAudioGuideClick = onAudioGuideClick, onShowImage = onShowImage)
                 13 -> {
-                    // [신규] 지역별 유용한 정보 탭 (복사 기능 제공)
                     Box(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                         if (regionData.usefulInfo.isBlank()) {
                             Text("등록된 유용한 정보가 없습니다.", modifier = Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.onBackground.copy(alpha=0.6f), fontSize = LocalAppTypography.current.body)
@@ -1869,13 +1941,10 @@ fun MapUserList(items: List<MapItem>) {
             if(item.googleMapLink.isNotBlank()) {
                 Text(
                     "📍 구글맵 실행", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body,
-                    modifier = Modifier.clickable {
-                        try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.googleMapLink))) } catch (e:Exception) { Toast.makeText(context,"링크 오류",Toast.LENGTH_SHORT).show() }
-                    }.padding(top=4.dp)
+                    modifier = Modifier.clickable { try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.googleMapLink))) } catch (e:Exception) { Toast.makeText(context,"링크 오류",Toast.LENGTH_SHORT).show() } }.padding(top=4.dp)
                 )
             }
         }
-        // 구글맵 HTML 임베드 코드를 웹뷰로 띄워줍니다.
         if(item.googleMapEmbedLink.isNotBlank()) {
             Spacer(modifier = Modifier.height(12.dp))
             AndroidView(
@@ -1914,13 +1983,37 @@ fun MapUserList(items: List<MapItem>) {
     }
 }
 
+/** 주차장 리스트 UI (다중 썸네일 지원) */
+@Composable
+fun ParkingUserList(items: List<ParkingItem>, onShowMultiImage: (List<String>, Int) -> Unit) {
+    val context = LocalContext.current
+    if (items.isEmpty()) {
+        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) { Text("등록된 주차장이 없습니다.", color = MaterialTheme.colorScheme.onBackground.copy(alpha=0.6f), fontSize = LocalAppTypography.current.body) }
+    } else {
+        LazyColumn(Modifier.fillMaxSize().padding(16.dp)) {
+            items(items) { item ->
+                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(item.name, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = LocalAppTypography.current.menu)
+                        ThumbnailRow(item.images, onShowMultiImage)
+                        if(item.googleMapLink.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("📍 구글맵 실행", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body, modifier = Modifier.clickable { try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.googleMapLink))) } catch (e:Exception) {} })
+                        }
+                        Text(item.address, fontSize = LocalAppTypography.current.body)
+                        if(item.details.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text(item.details, fontSize = LocalAppTypography.current.body) }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** 특정 관광지에 속한 오디오 가이드 리스트를 그룹핑하여 보여줍니다. */
 @Composable
 fun AudioGuideUserList(items: List<AudioGuideItem>, selectedAttraction: String?, onAttractionSelected: (String?) -> Unit, onAudioGuideClick: (String) -> Unit, onShowImage: (String) -> Unit) {
     if (items.isEmpty()) {
-        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-            Text("등록된 오디오 가이드가 없습니다.", color = MaterialTheme.colorScheme.onBackground.copy(alpha=0.6f), fontSize = LocalAppTypography.current.body)
-        }
+        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) { Text("등록된 오디오 가이드가 없습니다.", color = MaterialTheme.colorScheme.onBackground.copy(alpha=0.6f), fontSize = LocalAppTypography.current.body) }
         return
     }
     if (selectedAttraction == null) {
@@ -1990,7 +2083,6 @@ fun AudioGuideDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: I
     val lang1Tag = basicInfo.languages.getOrNull(0)?.takeIf { it.isNotBlank() } ?: Locale.getDefault().toLanguageTag()
     val lang2Tag = basicInfo.languages.getOrNull(1)?.takeIf { it.isNotBlank() } ?: Locale.US.toLanguageTag()
 
-    // 문장 단위 파싱 로직
     val paragraphs = remember(guideId) { item.details.split("\n") }
     val flatSentences = remember(guideId) {
         val list = mutableListOf<String>()
@@ -2089,7 +2181,6 @@ fun AudioGuideDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: I
                     val pIdx = chunks.getOrNull(1)?.toIntOrNull() ?: -1
                     val totalParts = chunks.getOrNull(2)?.toIntOrNull() ?: -1
 
-                    // 문장의 모든 파트가 끝났으면 다음 문장 재생
                     if (pIdx == totalParts - 1) {
                         if (isPlaying && sIdx + 1 < flatSentences.size) speakSentenceMixed(sIdx + 1)
                         else { isPlaying = false; isPaused = false; playingIndex = -1 }
@@ -2126,8 +2217,11 @@ fun AudioGuideDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: I
                     append(sentence)
                     val end = length
                     addStringAnnotation("SENTENCE", globalIdx.toString(), start, end)
-                    // 재생 중인 문장 하이라이트
-                    if (globalIdx == playingIndex && (isPlaying || isPaused)) addStyle(SpanStyle(background = Color.Yellow, color = Color.Black), start, end)
+
+                    // [다크모드 수정] 테마 기반의 하이라이트 색상 적용
+                    if (globalIdx == playingIndex && (isPlaying || isPaused)) {
+                        addStyle(SpanStyle(background = MaterialTheme.colorScheme.primary, color = MaterialTheme.colorScheme.onPrimary), start, end)
+                    }
                     append(" ")
                     globalIdx++
                 }
@@ -2136,7 +2230,6 @@ fun AudioGuideDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: I
         }
     )
 
-    // 재생 중인 문장으로 화면 자동 스크롤
     LaunchedEffect(playingIndex, textLayoutResult, viewportHeight) {
         if (playingIndex >= 0 && textLayoutResult != null && viewportHeight > 0) {
             currentAnnotatedText.getStringAnnotations("SENTENCE", 0, currentAnnotatedText.length).find { it.item.toInt() == playingIndex }?.let { annotation ->
@@ -2148,16 +2241,17 @@ fun AudioGuideDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: I
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFFFCF9F2)).clickable { togglePlayPause() }) {
+    // [다크모드 수정] 고정 색상 대신 MaterialTheme.colorScheme 사용
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).clickable { togglePlayPause() }) {
         Column(modifier = Modifier.fillMaxSize()) {
-            Card(modifier = Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(4.dp)) {
+            Card(modifier = Modifier.fillMaxWidth().padding(16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(4.dp)) {
                 Column(modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp, horizontal = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFD54F)), elevation = CardDefaults.cardElevation(2.dp)) { IconButton(onClick = { ttsSpeed = (ttsSpeed - 0.1f).coerceAtLeast(0.5f); TtsPrefs.setSpeed(context, ttsSpeed) }) { Icon(Icons.Default.FastRewind, "느리게", tint = MaterialTheme.colorScheme.primary) } }
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFD54F)), elevation = CardDefaults.cardElevation(2.dp)) { if (isPlaying) IconButton(onClick = togglePlayPause) { Icon(Icons.Default.Pause, "일시정지", tint = MaterialTheme.colorScheme.primary) } else IconButton(onClick = togglePlayPause) { Icon(Icons.Default.PlayArrow, "재생", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp)) } }
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer), elevation = CardDefaults.cardElevation(2.dp)) { IconButton(onClick = { ttsSpeed = (ttsSpeed - 0.1f).coerceAtLeast(0.5f); TtsPrefs.setSpeed(context, ttsSpeed) }) { Icon(Icons.Default.FastRewind, "느리게", tint = MaterialTheme.colorScheme.onSecondaryContainer) } }
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer), elevation = CardDefaults.cardElevation(2.dp)) { if (isPlaying) IconButton(onClick = togglePlayPause) { Icon(Icons.Default.Pause, "일시정지", tint = MaterialTheme.colorScheme.onSecondaryContainer) } else IconButton(onClick = togglePlayPause) { Icon(Icons.Default.PlayArrow, "재생", tint = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.size(28.dp)) } }
                         Text("속도: ${String.format(Locale.US, "%.1f", ttsSpeed)}x", fontSize = LocalAppTypography.current.body, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFD54F)), elevation = CardDefaults.cardElevation(2.dp)) { IconButton(onClick = stopPlaying) { Icon(Icons.Default.Stop, "정지", tint = MaterialTheme.colorScheme.primary) } }
-                        Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFFD54F)), elevation = CardDefaults.cardElevation(2.dp)) { IconButton(onClick = { ttsSpeed = (ttsSpeed + 0.1f).coerceAtMost(2.0f); TtsPrefs.setSpeed(context, ttsSpeed) }) { Icon(Icons.Default.FastForward, "빠르게", tint = MaterialTheme.colorScheme.primary) } }
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer), elevation = CardDefaults.cardElevation(2.dp)) { IconButton(onClick = stopPlaying) { Icon(Icons.Default.Stop, "정지", tint = MaterialTheme.colorScheme.onSecondaryContainer) } }
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer), elevation = CardDefaults.cardElevation(2.dp)) { IconButton(onClick = { ttsSpeed = (ttsSpeed + 0.1f).coerceAtMost(2.0f); TtsPrefs.setSpeed(context, ttsSpeed) }) { Icon(Icons.Default.FastForward, "빠르게", tint = MaterialTheme.colorScheme.onSecondaryContainer) } }
                     }
                     if (lang1Voices.size > 1 || lang2Voices.size > 1) {
                         Spacer(modifier = Modifier.height(12.dp))
@@ -2201,7 +2295,7 @@ fun AudioGuideDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: I
                     }
                 }
             }
-            Card(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp), colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(2.dp)) {
+            Card(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface), elevation = CardDefaults.cardElevation(2.dp)) {
                 Box(modifier = Modifier.fillMaxSize().onGloballyPositioned { viewportHeight = it.size.height.toFloat() }) {
                     Column(modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(16.dp)) {
                         if (item.imageUri.isNotBlank()) {
@@ -2210,7 +2304,7 @@ fun AudioGuideDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: I
                         }
                         Text("[${item.sequence}] ${item.title}", fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.title, color = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.height(16.dp))
-                        HorizontalDivider(color = Color(0xFFEEDDCC))
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             text = currentAnnotatedText,
@@ -2239,9 +2333,7 @@ fun AudioGuideDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: I
     }
 }
 
-/** * 범용 리스트 UI 템플릿
- * 데이터가 없을 때의 빈 화면 메시지 처리와 카드 UI 레이아웃을 제공합니다.
- */
+/** 범용 리스트 UI 템플릿 */
 @Composable
 fun <T> GenericUserList(items: List<T>, emptyMessage: String, itemContent: @Composable (T) -> Unit) {
     if (items.isEmpty()) {
@@ -2265,57 +2357,100 @@ fun <T> GenericUserList(items: List<T>, emptyMessage: String, itemContent: @Comp
     }
 }
 
-/** 단순 명칭 + 설명 + 구글맵 링크를 갖는 항목을 위한 리스트 UI */
+/** * 단순 명칭/설명 리스트 UI
+ * [방문 상태 반영] ✅, 🔥 아이콘과 배경색 변경 적용, 썸네일 가로 스크롤 적용
+ */
 @Composable
-fun SimpleUserList(items: List<SimpleItem>) {
+fun SimpleUserList(items: List<SimpleItem>, onShowMultiImage: (List<String>, Int) -> Unit) {
     val context = LocalContext.current
-    GenericUserList(items, "등록된 항목이 없습니다.") { item ->
-        Text(item.name, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = LocalAppTypography.current.menu)
-        if (item.googleMapLink.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "📍 구글맵 실행",
-                color = Color.Blue,
-                fontWeight = FontWeight.Bold,
-                fontSize = LocalAppTypography.current.body,
-                modifier = Modifier.clickable {
-                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.googleMapLink))) } catch (e:Exception) {}
+    if (items.isEmpty()) {
+        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) { Text("등록된 항목이 없습니다.", color = MaterialTheme.colorScheme.onBackground.copy(alpha=0.6f), fontSize = LocalAppTypography.current.body) }
+    } else {
+        LazyColumn(Modifier.fillMaxSize().padding(16.dp)) {
+            items(items) { item ->
+                // [다크모드 수정] 테마 기반의 컨테이너 색상 적용 (isVisited -> primaryContainer, isMustVisit -> tertiaryContainer)
+                val bgColor = when {
+                    item.isVisited -> MaterialTheme.colorScheme.primaryContainer
+                    item.isMustVisit -> MaterialTheme.colorScheme.tertiaryContainer
+                    else -> MaterialTheme.colorScheme.surface
                 }
-            )
-        }
-        if (item.desc.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(item.desc, fontSize = LocalAppTypography.current.body)
+                val contentColor = when {
+                    item.isVisited -> MaterialTheme.colorScheme.onPrimaryContainer
+                    item.isMustVisit -> MaterialTheme.colorScheme.onTertiaryContainer
+                    else -> MaterialTheme.colorScheme.primary
+                }
+
+                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), colors = CardDefaults.cardColors(containerColor = bgColor), elevation = CardDefaults.cardElevation(2.dp)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (item.isVisited) Text("✅ ", fontSize = LocalAppTypography.current.menu)
+                            else if (item.isMustVisit) Text("🔥 ", fontSize = LocalAppTypography.current.menu)
+                            Text(item.name, fontWeight = FontWeight.Bold, color = contentColor, fontSize = LocalAppTypography.current.menu)
+                        }
+                        ThumbnailRow(item.images, onShowMultiImage)
+                        if (item.googleMapLink.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("📍 구글맵 실행", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body, modifier = Modifier.clickable { try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.googleMapLink))) } catch (e:Exception) {} })
+                        }
+                        if (item.desc.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(item.desc, fontSize = LocalAppTypography.current.body)
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-/** 식당/맛집 특화 리스트 UI (메뉴 정보 포함) */
+/** * 식당/맛집 특화 리스트 UI
+ * [방문 상태 반영] ✅, 🔥 아이콘과 배경색 변경 적용, 썸네일 가로 스크롤 적용
+ */
 @Composable
-fun RestaurantUserList(items: List<RestaurantItem>) {
+fun RestaurantUserList(items: List<RestaurantItem>, onShowMultiImage: (List<String>, Int) -> Unit) {
     val context = LocalContext.current
-    GenericUserList(items, "등록된 식당이 없습니다.") { item ->
-        Text(item.name, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = LocalAppTypography.current.menu)
-        if (item.googleMapLink.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "📍 구글맵 실행",
-                color = Color.Blue,
-                fontWeight = FontWeight.Bold,
-                fontSize = LocalAppTypography.current.body,
-                modifier = Modifier.clickable {
-                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.googleMapLink))) } catch (e:Exception) {}
+    if (items.isEmpty()) {
+        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) { Text("등록된 식당이 없습니다.", color = MaterialTheme.colorScheme.onBackground.copy(alpha=0.6f), fontSize = LocalAppTypography.current.body) }
+    } else {
+        LazyColumn(Modifier.fillMaxSize().padding(16.dp)) {
+            items(items) { item ->
+                // [다크모드 수정] 테마 기반의 컨테이너 색상 적용
+                val bgColor = when {
+                    item.isVisited -> MaterialTheme.colorScheme.primaryContainer
+                    item.isMustVisit -> MaterialTheme.colorScheme.tertiaryContainer
+                    else -> MaterialTheme.colorScheme.surface
                 }
-            )
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text("메뉴: ${item.menu}", fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body)
-        if (item.desc.isNotBlank()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(item.desc, fontSize = LocalAppTypography.current.body)
+                val contentColor = when {
+                    item.isVisited -> MaterialTheme.colorScheme.onPrimaryContainer
+                    item.isMustVisit -> MaterialTheme.colorScheme.onTertiaryContainer
+                    else -> MaterialTheme.colorScheme.primary
+                }
+
+                Card(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), colors = CardDefaults.cardColors(containerColor = bgColor), elevation = CardDefaults.cardElevation(2.dp)) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (item.isVisited) Text("✅ ", fontSize = LocalAppTypography.current.menu)
+                            else if (item.isMustVisit) Text("🔥 ", fontSize = LocalAppTypography.current.menu)
+                            Text(item.name, fontWeight = FontWeight.Bold, color = contentColor, fontSize = LocalAppTypography.current.menu)
+                        }
+                        ThumbnailRow(item.images, onShowMultiImage)
+                        if (item.googleMapLink.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text("📍 구글맵 실행", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body, modifier = Modifier.clickable { try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.googleMapLink))) } catch (e:Exception) {} })
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("메뉴: ${item.menu}", fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body)
+                        if (item.desc.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(item.desc, fontSize = LocalAppTypography.current.body)
+                        }
+                    }
+                }
+            }
         }
     }
 }
+
 // =========================================================================================
 // [7] 관리자 화면 (Admin Screens)
 // - 앱 설정, 여행지 추가, 상세 정보 입력, 회화 번역, HTML 연동 등 관리자 기능을 담당합니다.
@@ -2333,7 +2468,6 @@ fun SettingsScreen(dbHelper: DatabaseHelper, ttsManager: TtsManager, onNavigate:
     var showFontDialog by remember { mutableStateOf(false) }
     val packageInfo = try { context.packageManager.getPackageInfo(context.packageName, 0) } catch (e: Exception) { null }
 
-    // 데이터 백업 (DB 및 이미지/파일을 ZIP으로 압축하여 내보내기)
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         uri?.let {
             CoroutineScope(Dispatchers.IO).launch {
@@ -2371,7 +2505,6 @@ fun SettingsScreen(dbHelper: DatabaseHelper, ttsManager: TtsManager, onNavigate:
         }
     }
 
-    // 데이터 복원 (ZIP 파일을 읽어 앱 내부 저장소 덮어쓰기)
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let {
             CoroutineScope(Dispatchers.IO).launch {
@@ -2593,9 +2726,7 @@ fun SettingsScreen(dbHelper: DatabaseHelper, ttsManager: TtsManager, onNavigate:
                                     maxLines = 1
                                 )
                                 ExposedDropdownMenu(expanded = exp1, onDismissRequest = { exp1 = false }) {
-                                    l1Voices.forEach { voiceWrap ->
-                                        DropdownMenuItem(text = { Text(voiceWrap.displayName, fontSize = LocalAppTypography.current.small) }, onClick = { selV1 = voiceWrap; exp1 = false })
-                                    }
+                                    l1Voices.forEach { voiceWrap -> DropdownMenuItem(text = { Text(voiceWrap.displayName, fontSize = LocalAppTypography.current.small) }, onClick = { selV1 = voiceWrap; exp1 = false }) }
                                 }
                             }
                             IconButton(onClick = {
@@ -2619,9 +2750,7 @@ fun SettingsScreen(dbHelper: DatabaseHelper, ttsManager: TtsManager, onNavigate:
                                     maxLines = 1
                                 )
                                 ExposedDropdownMenu(expanded = exp2, onDismissRequest = { exp2 = false }) {
-                                    l2Voices.forEach { voiceWrap ->
-                                        DropdownMenuItem(text = { Text(voiceWrap.displayName, fontSize = LocalAppTypography.current.small) }, onClick = { selV2 = voiceWrap; exp2 = false })
-                                    }
+                                    l2Voices.forEach { voiceWrap -> DropdownMenuItem(text = { Text(voiceWrap.displayName, fontSize = LocalAppTypography.current.small) }, onClick = { selV2 = voiceWrap; exp2 = false }) }
                                 }
                             }
                             IconButton(onClick = {
@@ -2645,9 +2774,7 @@ fun SettingsScreen(dbHelper: DatabaseHelper, ttsManager: TtsManager, onNavigate:
                                     maxLines = 1
                                 )
                                 ExposedDropdownMenu(expanded = exp3, onDismissRequest = { exp3 = false }) {
-                                    l3Voices.forEach { voiceWrap ->
-                                        DropdownMenuItem(text = { Text(voiceWrap.displayName, fontSize = LocalAppTypography.current.small) }, onClick = { selV3 = voiceWrap; exp3 = false })
-                                    }
+                                    l3Voices.forEach { voiceWrap -> DropdownMenuItem(text = { Text(voiceWrap.displayName, fontSize = LocalAppTypography.current.small) }, onClick = { selV3 = voiceWrap; exp3 = false }) }
                                 }
                             }
                             IconButton(onClick = {
@@ -2698,9 +2825,7 @@ fun SettingsScreen(dbHelper: DatabaseHelper, ttsManager: TtsManager, onNavigate:
                     }
                 ) { Text("전체 삭제", fontSize = LocalAppTypography.current.body) }
             },
-            dismissButton = {
-                TextButton(onClick = { showDataClearDialog = false }) { Text("취소", fontSize = LocalAppTypography.current.body) }
-            }
+            dismissButton = { TextButton(onClick = { showDataClearDialog = false }) { Text("취소", fontSize = LocalAppTypography.current.body) } }
         )
     }
 }
@@ -2716,9 +2841,7 @@ fun CountrySettingScreen(dbHelper: DatabaseHelper, onCountryClick: (Int, String)
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (savedCountries.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("추가된 나라가 없습니다.", fontSize = LocalAppTypography.current.body)
-                }
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("추가된 나라가 없습니다.", fontSize = LocalAppTypography.current.body) }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(savedCountries) { (id, name, flag) ->
@@ -2727,15 +2850,8 @@ fun CountrySettingScreen(dbHelper: DatabaseHelper, onCountryClick: (Int, String)
                             modifier = Modifier.clickable { onCountryClick(id, name) },
                             trailingContent = {
                                 Row {
-                                    IconButton(onClick = { editingId = id; showEditDialog = true }) {
-                                        Icon(Icons.Default.Edit, "수정", tint = MaterialTheme.colorScheme.primary)
-                                    }
-                                    IconButton(onClick = {
-                                        dbHelper.deleteCountry(name)
-                                        savedCountries = dbHelper.getAllCountriesWithId()
-                                    }) {
-                                        Icon(Icons.Default.Delete, "삭제", tint = MaterialTheme.colorScheme.error)
-                                    }
+                                    IconButton(onClick = { editingId = id; showEditDialog = true }) { Icon(Icons.Default.Edit, "수정", tint = MaterialTheme.colorScheme.primary) }
+                                    IconButton(onClick = { dbHelper.deleteCountry(name); savedCountries = dbHelper.getAllCountriesWithId() }) { Icon(Icons.Default.Delete, "삭제", tint = MaterialTheme.colorScheme.error) }
                                 }
                             }
                         )
@@ -2743,28 +2859,19 @@ fun CountrySettingScreen(dbHelper: DatabaseHelper, onCountryClick: (Int, String)
                     }
                 }
             }
-            FloatingActionButton(onClick = { showAddDialog = true }, modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)) {
-                Icon(Icons.Default.Add, "추가")
-            }
+            FloatingActionButton(onClick = { showAddDialog = true }, modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)) { Icon(Icons.Default.Add, "추가") }
         }
-        Button(onClick = onGoHome, modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-            Text("홈으로 이동", fontSize = LocalAppTypography.current.menu)
-        }
+        Button(onClick = onGoHome, modifier = Modifier.fillMaxWidth().padding(16.dp)) { Text("홈으로 이동", fontSize = LocalAppTypography.current.menu) }
     }
 
     if (showAddDialog) {
         CountrySelectDialog(onDismiss = { showAddDialog = false }) { n, f, c ->
-            dbHelper.insertCountry(n, f, c)
-            savedCountries = dbHelper.getAllCountriesWithId()
-            showAddDialog = false
+            dbHelper.insertCountry(n, f, c); savedCountries = dbHelper.getAllCountriesWithId(); showAddDialog = false
         }
     }
     if (showEditDialog && editingId != null) {
         CountrySelectDialog(onDismiss = { showEditDialog = false; editingId = null }) { n, f, c ->
-            dbHelper.updateCountryById(editingId!!, n, f, c)
-            savedCountries = dbHelper.getAllCountriesWithId()
-            showEditDialog = false
-            editingId = null
+            dbHelper.updateCountryById(editingId!!, n, f, c); savedCountries = dbHelper.getAllCountriesWithId(); showEditDialog = false; editingId = null
         }
     }
 }
@@ -2799,11 +2906,7 @@ fun CountrySelectDialog(onDismiss: () -> Unit, onCountrySelected: (String, Strin
             } else {
                 LazyColumn(modifier = Modifier.height(400.dp)) {
                     items(countryList) { (n, f, c) ->
-                        Text(
-                            text = "$f $n",
-                            modifier = Modifier.fillMaxWidth().clickable { onCountrySelected(n, f, c) }.padding(12.dp),
-                            fontSize = LocalAppTypography.current.body
-                        )
+                        Text(text = "$f $n", modifier = Modifier.fillMaxWidth().clickable { onCountrySelected(n, f, c) }.padding(12.dp), fontSize = LocalAppTypography.current.body)
                         HorizontalDivider()
                     }
                 }
@@ -2819,24 +2922,12 @@ fun CountryDetailScreen(dbHelper: DatabaseHelper, countryId: Int, selectedTabInd
     val pagerState = rememberPagerState(initialPage = selectedTabIndex) { tabs.size }
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(selectedTabIndex) {
-        if (pagerState.currentPage != selectedTabIndex) {
-            pagerState.scrollToPage(selectedTabIndex)
-        }
-    }
-    LaunchedEffect(pagerState.currentPage) {
-        onTabSelected(pagerState.currentPage)
-    }
+    LaunchedEffect(selectedTabIndex) { if (pagerState.currentPage != selectedTabIndex) pagerState.scrollToPage(selectedTabIndex) }
+    LaunchedEffect(pagerState.settledPage) { onTabSelected(pagerState.settledPage) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         ScrollableTabRow(selectedTabIndex = pagerState.currentPage, edgePadding = 8.dp) {
-            tabs.forEachIndexed { index, title ->
-                Tab(
-                    selected = pagerState.currentPage == index,
-                    onClick = { coroutineScope.launch { pagerState.animateScrollToPage(index) } },
-                    text = { Text(title, fontSize = LocalAppTypography.current.body) }
-                )
-            }
+            tabs.forEachIndexed { index, title -> Tab(selected = pagerState.currentPage == index, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(index) } }, text = { Text(title, fontSize = LocalAppTypography.current.body) }) }
         }
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f).fillMaxWidth(), verticalAlignment = Alignment.Top) { page ->
             when (page) {
@@ -2866,12 +2957,7 @@ fun TtsLanguageDropdown(label: String, selectedTag: String, availableLocales: Li
             modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            availableLocales.forEach { locale ->
-                DropdownMenuItem(
-                    text = { Text(locale.displayName, fontSize = LocalAppTypography.current.body) },
-                    onClick = { onLocaleSelected(locale.toLanguageTag()); expanded = false }
-                )
-            }
+            availableLocales.forEach { locale -> DropdownMenuItem(text = { Text(locale.displayName, fontSize = LocalAppTypography.current.body) }, onClick = { onLocaleSelected(locale.toLanguageTag()); expanded = false }) }
         }
     }
 }
@@ -2887,21 +2973,13 @@ fun BasicInfoForm(dbHelper: DatabaseHelper, countryId: Int) {
     var isEditing by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
-    val picker1 = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let { coroutineScope.launch(Dispatchers.IO) { val savedPath = saveImageToInternalStorage(context, it); withContext(Dispatchers.Main) { if (savedPath.isNotBlank()) data = data.copy(routeImageUri1 = savedPath) } } }
-    }
-    val picker2 = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let { coroutineScope.launch(Dispatchers.IO) { val savedPath = saveImageToInternalStorage(context, it); withContext(Dispatchers.Main) { if (savedPath.isNotBlank()) data = data.copy(routeImageUri2 = savedPath) } } }
-    }
+    val picker1 = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let { coroutineScope.launch(Dispatchers.IO) { val savedPath = saveImageToInternalStorage(context, it); withContext(Dispatchers.Main) { if (savedPath.isNotBlank()) data = data.copy(routeImageUri1 = savedPath) } } } }
+    val picker2 = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri -> uri?.let { coroutineScope.launch(Dispatchers.IO) { val savedPath = saveImageToInternalStorage(context, it); withContext(Dispatchers.Main) { if (savedPath.isNotBlank()) data = data.copy(routeImageUri2 = savedPath) } } } }
 
     var availableLocales by remember { mutableStateOf<List<Locale>>(emptyList()) }
     DisposableEffect(Unit) {
         var ttsInstance: TextToSpeech? = null
-        ttsInstance = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) {
-                availableLocales = ttsInstance?.availableLanguages?.toList()?.sortedBy { it.displayName } ?: emptyList()
-            }
-        }
+        ttsInstance = TextToSpeech(context) { status -> if (status == TextToSpeech.SUCCESS) availableLocales = ttsInstance?.availableLanguages?.toList()?.sortedBy { it.displayName } ?: emptyList() }
         onDispose { ttsInstance?.shutdown() }
     }
 
@@ -3031,8 +3109,7 @@ fun BasicInfoForm(dbHelper: DatabaseHelper, countryId: Int) {
                             val r2 = data.exchangeRate2.toFloatOrNull() ?: 0f
                             val r3 = data.exchangeRate3.toFloatOrNull() ?: 0f
 
-                            var baseCur: String? = null
-                            var baseVal = 0f
+                            var baseCur: String? = null; var baseVal = 0f
 
                             when (focusedIndex) {
                                 0 -> if (c1.isNotBlank()) { baseCur = c1; baseVal = r1 }
@@ -3050,9 +3127,7 @@ fun BasicInfoForm(dbHelper: DatabaseHelper, countryId: Int) {
                                         val rates = org.json.JSONObject(response).getJSONObject("rates")
                                         val df = java.text.DecimalFormat("#.####", java.text.DecimalFormatSymbols(java.util.Locale.US))
 
-                                        var newR1 = data.exchangeRate1
-                                        var newR2 = data.exchangeRate2
-                                        var newR3 = data.exchangeRate3
+                                        var newR1 = data.exchangeRate1; var newR2 = data.exchangeRate2; var newR3 = data.exchangeRate3
 
                                         if (c1.isNotBlank() && baseCur != c1 && rates.has(c1)) newR1 = df.format(baseVal * rates.getDouble(c1))
                                         if (c2.isNotBlank() && baseCur != c2 && rates.has(c2)) newR2 = df.format(baseVal * rates.getDouble(c2))
@@ -3064,28 +3139,17 @@ fun BasicInfoForm(dbHelper: DatabaseHelper, countryId: Int) {
                                             Toast.makeText(context, "$baseCur 기준으로 자동 계산 완료!", Toast.LENGTH_SHORT).show()
                                         }
                                     } catch(e: Exception) {
-                                        withContext(Dispatchers.Main) {
-                                            isFetching = false
-                                            Toast.makeText(context, "환율 가져오기 실패. 직접 입력해주세요.", Toast.LENGTH_SHORT).show()
-                                        }
+                                        withContext(Dispatchers.Main) { isFetching = false; Toast.makeText(context, "환율 가져오기 실패. 직접 입력해주세요.", Toast.LENGTH_SHORT).show() }
                                     }
                                 }
-                            } else {
-                                Toast.makeText(context, "현재 선택된 기준 화폐에 0이 아닌 금액을 입력하세요.", Toast.LENGTH_LONG).show()
-                            }
+                            } else Toast.makeText(context, "현재 선택된 기준 화폐에 0이 아닌 금액을 입력하세요.", Toast.LENGTH_LONG).show()
                         },
                         modifier = Modifier.fillMaxWidth().padding(top=8.dp),
                         enabled = !isFetching
                     ) { Text(if (isFetching) "가져오는 중..." else "현재 환율 자동 가져오기 (인터넷 필요)") }
                 }
             }
-            Button(
-                onClick = {
-                    dbHelper.updateCountryInfo(countryId, true, gson.toJson(data))
-                    isEditing = false
-                },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
-            ) { Text("저장 완료", fontSize = LocalAppTypography.current.menu) }
+            Button(onClick = { dbHelper.updateCountryInfo(countryId, true, gson.toJson(data)); isEditing = false }, modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)) { Text("저장 완료", fontSize = LocalAppTypography.current.menu) }
         }
     } else {
         Column(modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState())) {
@@ -3117,7 +3181,6 @@ fun AdminAccountBookTab(dbHelper: DatabaseHelper, countryId: Int) {
 
     val configuredCurrencies = basicInfo.currencies.filter { it.isNotBlank() }
     val currencies = if (configuredCurrencies.isEmpty()) listOf("KRW") else configuredCurrencies
-
     val categoriesList = listOf("식당", "마트", "간식", "주유/충전", "주차", "교통", "입장료", "세금", "숙박", "기념품", "선물", "렌터카", "항공", "기타")
 
     val c1 = basicInfo.currencies.getOrNull(0)?.takeIf { it.isNotBlank() } ?: "KRW"
@@ -3143,8 +3206,7 @@ fun AdminAccountBookTab(dbHelper: DatabaseHelper, countryId: Int) {
                                 Row {
                                     Icon(Icons.Default.Edit, "수정", modifier = Modifier.clickable { editingItem = item; showDialog = true }.padding(end=8.dp), tint = MaterialTheme.colorScheme.primary)
                                     Icon(Icons.Default.Delete, "삭제", modifier = Modifier.clickable {
-                                        val newList = items.filter { it.id != item.id }
-                                        items = newList
+                                        val newList = items.filter { it.id != item.id }; items = newList
                                         dbHelper.updateCountryInfo(countryId, true, gson.toJson(basicInfo.copy(accountItems = newList)))
                                     }, tint = MaterialTheme.colorScheme.error)
                                 }
@@ -3153,9 +3215,7 @@ fun AdminAccountBookTab(dbHelper: DatabaseHelper, countryId: Int) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(item.content, fontSize = LocalAppTypography.current.body)
-                                    if (item.details.isNotBlank()) {
-                                        Text(item.details, fontSize = LocalAppTypography.current.small, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
+                                    if (item.details.isNotBlank()) Text(item.details, fontSize = LocalAppTypography.current.small, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 val amtC1 = toC1(parseSafeFloat(item.amount), item.currency)
                                 MultiCurrencyDisplay(amtC1, c1, r1, c2, r2, c3, r3, LocalAppTypography.current.body, LocalAppTypography.current.small)
@@ -3169,12 +3229,9 @@ fun AdminAccountBookTab(dbHelper: DatabaseHelper, countryId: Int) {
     }
 
     if (showDialog) {
-        var date by remember { mutableStateOf(editingItem?.date ?: "") }
-        var category by remember { mutableStateOf(editingItem?.category ?: categoriesList[0]) }
-        var expandedCategory by remember { mutableStateOf(false) }
-        var content by remember { mutableStateOf(editingItem?.content ?: "") }
-        var details by remember { mutableStateOf(editingItem?.details ?: "") }
-        var amount by remember { mutableStateOf(editingItem?.amount ?: "") }
+        var date by remember { mutableStateOf(editingItem?.date ?: "") }; var category by remember { mutableStateOf(editingItem?.category ?: categoriesList[0]) }
+        var expandedCategory by remember { mutableStateOf(false) }; var content by remember { mutableStateOf(editingItem?.content ?: "") }
+        var details by remember { mutableStateOf(editingItem?.details ?: "") }; var amount by remember { mutableStateOf(editingItem?.amount ?: "") }
         var currency by remember { mutableStateOf(editingItem?.currency ?: currencies[0]) }
 
         AlertDialog(
@@ -3184,31 +3241,19 @@ fun AdminAccountBookTab(dbHelper: DatabaseHelper, countryId: Int) {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
                     val cal = Calendar.getInstance()
                     OutlinedTextField(
-                        value = date,
-                        onValueChange = { date = it },
-                        label = { Text("날짜 (예: 2026/04/15)") },
-                        trailingIcon = {
-                            Text("📅", modifier = Modifier.clickable {
-                                DatePickerDialog(context, { _, y, m, d -> date = String.format("%04d/%02d/%02d", y, m + 1, d) }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
-                            }.padding(8.dp), fontSize = LocalAppTypography.current.menu)
-                        },
+                        value = date, onValueChange = { date = it }, label = { Text("날짜 (예: 2026/04/15)") },
+                        trailingIcon = { Text("📅", modifier = Modifier.clickable { DatePickerDialog(context, { _, y, m, d -> date = String.format("%04d/%02d/%02d", y, m + 1, d) }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show() }.padding(8.dp), fontSize = LocalAppTypography.current.menu) },
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-
                     ExposedDropdownMenuBox(expanded = expandedCategory, onExpandedChange = { expandedCategory = !expandedCategory }) {
                         OutlinedTextField(
                             value = category, onValueChange = {}, readOnly = true, label = { Text("분류") },
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedCategory) },
                             modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
                         )
-                        ExposedDropdownMenu(expanded = expandedCategory, onDismissRequest = { expandedCategory = false }) {
-                            categoriesList.forEach { cat ->
-                                DropdownMenuItem(text = { Text(cat) }, onClick = { category = cat; expandedCategory = false })
-                            }
-                        }
+                        ExposedDropdownMenu(expanded = expandedCategory, onDismissRequest = { expandedCategory = false }) { categoriesList.forEach { cat -> DropdownMenuItem(text = { Text(cat) }, onClick = { category = cat; expandedCategory = false }) } }
                     }
-
                     OutlinedTextField(value = content, onValueChange = { content = it }, label = { Text("지출 내용") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = details, onValueChange = { details = it }, label = { Text("세부내역 (선택)") }, minLines = 3, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = amount, onValueChange = { amount = it }, label = { Text("금액") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
@@ -3217,11 +3262,7 @@ fun AdminAccountBookTab(dbHelper: DatabaseHelper, countryId: Int) {
                     Row(modifier = Modifier.horizontalScroll(rememberScrollState()).padding(top = 4.dp)) {
                         currencies.forEach { curr ->
                             val isSelected = currency == curr
-                            Button(
-                                onClick = { currency = curr },
-                                colors = ButtonDefaults.buttonColors(containerColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer),
-                                modifier = Modifier.padding(end = 4.dp)
-                            ) { Text(curr, fontSize = LocalAppTypography.current.body) }
+                            Button(onClick = { currency = curr }, colors = ButtonDefaults.buttonColors(containerColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer), modifier = Modifier.padding(end = 4.dp)) { Text(curr, fontSize = LocalAppTypography.current.body) }
                         }
                     }
                 }
@@ -3432,7 +3473,7 @@ fun PhraseTab(dbHelper: DatabaseHelper, countryId: Int) {
     }
 }
 
-/** [국가 관리 탭 2] 하위 지역(도시)을 관리하는 화면 */
+/** [지역 관리 탭 2] 하위 지역(도시)을 관리하는 화면 */
 @Composable
 fun RegionTab(dbHelper: DatabaseHelper, countryId: Int, onRegionClick: (Int, String) -> Unit) {
     var regions by remember { mutableStateOf(dbHelper.getRegionsByCountry(countryId)) }
@@ -3503,7 +3544,7 @@ fun RegionTab(dbHelper: DatabaseHelper, countryId: Int, onRegionClick: (Int, Str
  * 총 14개의 탭을 관리하며 모든 데이터는 하나의 RegionData JSON으로 통합 저장됩니다.
  */
 @Composable
-fun RegionDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: Int, selectedTabIndex: Int, onTabSelected: (Int) -> Unit, onShowImage: (String) -> Unit) {
+fun RegionDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: Int, selectedTabIndex: Int, onTabSelected: (Int) -> Unit, onShowImage: (String) -> Unit, onShowMultiImage: (List<String>, Int) -> Unit) {
     val tabs = listOf("상세정보", "주요일정", "숙소정보", "이동경로/지도", "여행지/지도", "맛집/지도", "주차장정보", "먹거리/기념품", "맛집정보", "가성비맛집", "추천스팟", "갤러리", "오디오가이드", "유용한정보")
     val pagerState = rememberPagerState(initialPage = selectedTabIndex) { tabs.size }
     val coroutineScope = rememberCoroutineScope()
@@ -3518,11 +3559,12 @@ fun RegionDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: Int, 
             pagerState.scrollToPage(selectedTabIndex)
         }
     }
-    LaunchedEffect(pagerState.currentPage) {
-        if (selectedTabIndex != pagerState.currentPage) onTabSelected(pagerState.currentPage)
+    LaunchedEffect(pagerState.settledPage) {
+        if (selectedTabIndex != pagerState.settledPage) onTabSelected(pagerState.settledPage)
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    // [다크모드 수정] 백그라운드 색상 테마 연동
+    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         ScrollableTabRow(selectedTabIndex = pagerState.currentPage, edgePadding = 8.dp) {
             tabs.forEachIndexed { index, title -> Tab(selected = pagerState.currentPage == index, onClick = { coroutineScope.launch { pagerState.animateScrollToPage(index) } }, text = { Text(title, fontSize = LocalAppTypography.current.body) }) }
         }
@@ -3530,16 +3572,16 @@ fun RegionDetailScreen(dbHelper: DatabaseHelper, countryId: Int, regionId: Int, 
             when (page) {
                 0 -> SingleDetailManager(currentData) { saveRegionData(it) }
                 1 -> ScheduleManager(currentData.schedules) { saveRegionData(currentData.copy(schedules = it)) }
-                2 -> SingleAccommodationManager(currentData.accommodation, onShowImage) { saveRegionData(currentData.copy(accommodation = it)) }
+                2 -> SingleAccommodationManager(currentData.accommodation, onShowMultiImage) { saveRegionData(currentData.copy(accommodation = it)) }
                 3 -> MapItemManager("이동경로상세", currentData.routes) { saveRegionData(currentData.copy(routes = it)) }
                 4 -> MapItemManager("이동경로상세", currentData.attractions) { saveRegionData(currentData.copy(attractions = it)) }
                 5 -> MapItemManager("이동경로상세", currentData.restaurantMaps) { saveRegionData(currentData.copy(restaurantMaps = it)) }
-                6 -> ParkingManager(currentData.parkings) { saveRegionData(currentData.copy(parkings = it)) }
-                7 -> SimpleItemManager("명칭", currentData.foods) { saveRegionData(currentData.copy(foods = it)) }
-                8 -> RestaurantManager(currentData.restaurants) { saveRegionData(currentData.copy(restaurants = it)) }
-                9 -> RestaurantManager(currentData.cheapRestaurants) { saveRegionData(currentData.copy(cheapRestaurants = it)) }
-                10 -> SimpleItemManager("명칭", currentData.spots) { saveRegionData(currentData.copy(spots = it)) }
-                11 -> GalleryManager(currentData.galleries, onShowImage) { saveRegionData(currentData.copy(galleries = it)) }
+                6 -> ParkingManager(currentData.parkings, onShowMultiImage) { saveRegionData(currentData.copy(parkings = it)) }
+                7 -> SimpleItemManager("명칭", currentData.foods, onShowMultiImage) { saveRegionData(currentData.copy(foods = it)) }
+                8 -> RestaurantManager(currentData.restaurants, onShowMultiImage) { saveRegionData(currentData.copy(restaurants = it)) }
+                9 -> RestaurantManager(currentData.cheapRestaurants, onShowMultiImage) { saveRegionData(currentData.copy(cheapRestaurants = it)) }
+                10 -> SimpleItemManager("명칭", currentData.spots, onShowMultiImage) { saveRegionData(currentData.copy(spots = it)) }
+                11 -> GalleryManager(currentData.galleries, onShowMultiImage) { saveRegionData(currentData.copy(galleries = it)) }
                 12 -> AudioGuideManager(dbHelper, countryId, regionId, currentData, onShowImage) { saveRegionData(it) }
                 13 -> RegionUsefulInfoManager(currentData.usefulInfo) { saveRegionData(currentData.copy(usefulInfo = it)) }
             }
@@ -3606,7 +3648,8 @@ fun SingleDetailManager(regionData: RegionData, onSave: (RegionData) -> Unit) {
         Spacer(modifier = Modifier.height(16.dp))
 
         Text("추가 정보 자동 연동 (HTML)", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary, fontSize = LocalAppTypography.current.menu)
-        Text("양식: <li><strong>이름</strong> - 메뉴: 메뉴내용 - 설명내용 <a href=\"링크\">지도</a></li>", color = Color.Gray, fontSize = LocalAppTypography.current.small)
+        // [다크모드 수정] 회색 텍스트도 테마 색상으로 대체
+        Text("양식: <li><strong>이름</strong> - 메뉴: 메뉴내용 - 설명내용 <a href=\"링크\">지도</a></li>", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = LocalAppTypography.current.small)
         Spacer(modifier = Modifier.height(8.dp))
 
         OutlinedTextField(value = restaurantsHtml, onValueChange = { restaurantsHtml = it }, label = { Text("맛집 정보 (<li>...</li>)") }, minLines = 5, modifier = Modifier.fillMaxWidth())
@@ -3615,7 +3658,7 @@ fun SingleDetailManager(regionData: RegionData, onSave: (RegionData) -> Unit) {
         OutlinedTextField(value = cheapRestaurantsHtml, onValueChange = { cheapRestaurantsHtml = it }, label = { Text("가성비 맛집 (<li>...</li>)") }, minLines = 5, modifier = Modifier.fillMaxWidth())
         Spacer(modifier = Modifier.height(8.dp))
 
-        Text("양식: <li><strong>이름</strong> - 설명내용 <a href=\"링크\">지도</a></li>", color = Color.Gray, fontSize = LocalAppTypography.current.small)
+        Text("양식: <li><strong>이름</strong> - 설명내용 <a href=\"링크\">지도</a></li>", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = LocalAppTypography.current.small)
         OutlinedTextField(value = spotsHtml, onValueChange = { spotsHtml = it }, label = { Text("추천 스팟 (<li>...</li>)") }, minLines = 5, modifier = Modifier.fillMaxWidth())
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -3623,11 +3666,10 @@ fun SingleDetailManager(regionData: RegionData, onSave: (RegionData) -> Unit) {
         Button(
             onClick = {
                 val updatedDetail = regionData.detail.copy(travelDates = travelDates, stayDuration = stayDuration, summary = summary, tips = tips)
-                val parsedRestaurants = parseRestaurantHtml(restaurantsHtml)
-                val parsedCheap = parseRestaurantHtml(cheapRestaurantsHtml)
-                val parsedSpots = parseSimpleHtml(spotsHtml)
+                val parsedRestaurants = parseRestaurantHtml(restaurantsHtml, regionData.restaurants)
+                val parsedCheap = parseRestaurantHtml(cheapRestaurantsHtml, regionData.cheapRestaurants)
+                val parsedSpots = parseSimpleHtml(spotsHtml, regionData.spots)
 
-                // HTML에서 파싱된 정보로 하위 탭(맛집, 스팟 등)의 리스트를 통째로 덮어씁니다.
                 onSave(regionData.copy(
                     detail = updatedDetail,
                     restaurants = parsedRestaurants,
@@ -3641,9 +3683,11 @@ fun SingleDetailManager(regionData: RegionData, onSave: (RegionData) -> Unit) {
     }
 }
 
-/** [지역 관리 탭 3] 숙소정보 관리 */
+/** [지역 관리 탭 3] 숙소정보 관리
+ * 첨부파일 최대 5개까지 등록 허용
+ */
 @Composable
-fun SingleAccommodationManager(item: AccommodationItem, onShowImage: (String) -> Unit, onSave: (AccommodationItem) -> Unit) {
+fun SingleAccommodationManager(item: AccommodationItem, onShowMultiImage: (List<String>, Int) -> Unit, onSave: (AccommodationItem) -> Unit) {
     val context = LocalContext.current
     var n by remember { mutableStateOf(item.name) }
     var a by remember { mutableStateOf(item.address) }
@@ -3666,11 +3710,11 @@ fun SingleAccommodationManager(item: AccommodationItem, onShowImage: (String) ->
                 if (savedPath.isNotBlank()) {
                     withContext(Dispatchers.Main) {
                         val newList = attachedFiles.toMutableList()
-                        if (newList.size < 3) {
+                        if (newList.size < 5) {
                             newList.add(savedPath)
                             attachedFiles = newList
                         } else {
-                            Toast.makeText(context, "최대 3개까지만 첨부 가능합니다.", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "최대 5개까지만 첨부 가능합니다.", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
@@ -3692,11 +3736,18 @@ fun SingleAccommodationManager(item: AccommodationItem, onShowImage: (String) ->
         OutlinedTextField(value = oi, onValueChange = { oi = it }, label = { Text("기타정보") }, minLines = 3, modifier = Modifier.fillMaxWidth())
 
         Spacer(modifier = Modifier.height(16.dp))
-        Text("첨부파일 (최대 3개)", fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body)
+        Text("첨부파일 (최대 5개)", fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body)
+
+        val imageFiles = attachedFiles.filter { isImageFile(it) }
         attachedFiles.forEachIndexed { index, file ->
             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                 if (isImageFile(file)) {
-                    UriImage(uriString = file, modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp)).clickable { onShowImage(file) })
+                    UriImage(
+                        uriString = file,
+                        modifier = Modifier.size(50.dp).clip(RoundedCornerShape(8.dp)).clickable {
+                            onShowMultiImage(imageFiles, imageFiles.indexOf(file).coerceAtLeast(0))
+                        }
+                    )
                 } else {
                     val fileName = if (file.contains("_")) file.substringAfter("_") else file.substringAfterLast("/")
                     Text("📄 $fileName", modifier = Modifier.weight(1f).padding(end = 8.dp), maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = LocalAppTypography.current.body)
@@ -3708,7 +3759,7 @@ fun SingleAccommodationManager(item: AccommodationItem, onShowImage: (String) ->
                 }) { Icon(Icons.Default.Delete, "삭제", tint = MaterialTheme.colorScheme.error) }
             }
         }
-        if (attachedFiles.size < 3) {
+        if (attachedFiles.size < 5) {
             Button(onClick = { filePicker.launch("*/*") }, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) { Text("파일 첨부하기") }
         }
 
@@ -3870,11 +3921,15 @@ fun MapItemManager(detailLabel: String, items: List<MapItem>, onSave: (List<MapI
     }
 }
 
-/** [지역 관리 탭 7] 주차장 정보 관리 */
+/** * [지역 관리 탭 7] 주차장 정보 관리
+ * 다중 이미지 첨부 기능 추가
+ */
 @Composable
-fun ParkingManager(items: List<ParkingItem>, onSave: (List<ParkingItem>) -> Unit) {
+fun ParkingManager(items: List<ParkingItem>, onShowMultiImage: (List<String>, Int) -> Unit, onSave: (List<ParkingItem>) -> Unit) {
+    val context = LocalContext.current
     var showDialog by remember { mutableStateOf(false) }
     var editingItem by remember { mutableStateOf<ParkingItem?>(null) }
+    val coroutineScope = rememberCoroutineScope()
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (items.isEmpty()) {
@@ -3891,6 +3946,16 @@ fun ParkingManager(items: List<ParkingItem>, onSave: (List<ParkingItem>) -> Unit
                                     Icon(Icons.Default.Delete, "삭제", modifier = Modifier.clickable { onSave(items.filter { it.id != item.id }) }, tint = MaterialTheme.colorScheme.error)
                                 }
                             }
+                            if (item.images.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                    item.images.forEachIndexed { index, uri ->
+                                        UriImage(uriString = uri, modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)).clickable { onShowMultiImage(item.images, index) })
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
                             Text(item.address, fontSize = LocalAppTypography.current.body)
                         }
                     }
@@ -3905,20 +3970,48 @@ fun ParkingManager(items: List<ParkingItem>, onSave: (List<ParkingItem>) -> Unit
         var a by remember { mutableStateOf(editingItem?.address ?: "") }
         var gml by remember { mutableStateOf(editingItem?.googleMapLink ?: "") }
         var d by remember { mutableStateOf(editingItem?.details ?: "") }
+        var images by remember { mutableStateOf(editingItem?.images ?: emptyList()) }
+
+        val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            uri?.let {
+                coroutineScope.launch(Dispatchers.IO) {
+                    val savedPath = saveImageToInternalStorage(context, it)
+                    withContext(Dispatchers.Main) { if (savedPath.isNotBlank()) images = images + savedPath }
+                }
+            }
+        }
+
         AlertDialog(
             onDismissRequest = { showDialog = false },
             title = { Text("주차장 편집", fontSize = LocalAppTypography.current.title) },
             text = {
-                Column {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     OutlinedTextField(value = n, onValueChange = { n = it }, label = { Text("주차장명") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = a, onValueChange = { a = it }, label = { Text("주소") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = gml, onValueChange = { gml = it }, label = { Text("구글맵 링크") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = d, onValueChange = { d = it }, label = { Text("상세정보") }, minLines = 3, modifier = Modifier.fillMaxWidth())
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("이미지 첨부 (${images.size}장)", fontSize = LocalAppTypography.current.small, color = Color.Gray)
+                    if (images.isNotEmpty()) {
+                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()).padding(top = 8.dp)) {
+                            images.forEachIndexed { index, uri ->
+                                Box {
+                                    UriImage(uriString = uri, modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)))
+                                    IconButton(onClick = { val mut = images.toMutableList(); mut.removeAt(index); images = mut }, modifier = Modifier.align(Alignment.TopEnd).size(20.dp)) {
+                                        Icon(Icons.Default.Close, "삭제", tint = Color.Red)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                        }
+                    }
+                    Button(onClick = { imagePicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("이미지 추가") }
                 }
             },
             confirmButton = {
                 Button(onClick = {
-                    val newItem = ParkingItem(editingItem?.id ?: UUID.randomUUID().toString(), n, a, gml, d)
+                    val newItem = ParkingItem(editingItem?.id ?: UUID.randomUUID().toString(), n, a, gml, d, images)
                     val newList = items.toMutableList()
                     val idx = newList.indexOfFirst { it.id == newItem.id }
                     if (idx >= 0) newList[idx] = newItem else newList.add(newItem)
@@ -3930,11 +4023,15 @@ fun ParkingManager(items: List<ParkingItem>, onSave: (List<ParkingItem>) -> Unit
     }
 }
 
-/** [지역 관리 공통] 단순 아이템 관리 (먹거리/기념품, 스팟 등 HTML 동기화 가능 대상) */
+/** * [지역 관리 공통] 단순 아이템 관리 (먹거리/기념품, 스팟 등 HTML 동기화 가능 대상)
+ * 다중 이미지 첨부 및 방문상태(isMustVisit, isVisited) 체크박스 추가
+ */
 @Composable
-fun SimpleItemManager(nameLabel: String, items: List<SimpleItem>, onSave: (List<SimpleItem>) -> Unit) {
+fun SimpleItemManager(nameLabel: String, items: List<SimpleItem>, onShowMultiImage: (List<String>, Int) -> Unit, onSave: (List<SimpleItem>) -> Unit) {
+    val context = LocalContext.current
     var showDialog by remember { mutableStateOf(false) }
     var editingItem by remember { mutableStateOf<SimpleItem?>(null) }
+    val coroutineScope = rememberCoroutineScope()
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (items.isEmpty()) {
@@ -3945,10 +4042,23 @@ fun SimpleItemManager(nameLabel: String, items: List<SimpleItem>, onSave: (List<
                     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(item.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), fontSize = LocalAppTypography.current.body)
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    if (item.isVisited) Text("✅ ", fontSize = LocalAppTypography.current.menu)
+                                    else if (item.isMustVisit) Text("🔥 ", fontSize = LocalAppTypography.current.menu)
+                                    Text(item.name, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body)
+                                }
                                 Row {
                                     Icon(Icons.Default.Edit, "수정", modifier = Modifier.clickable { editingItem = item; showDialog = true }.padding(end=8.dp), tint = MaterialTheme.colorScheme.primary)
                                     Icon(Icons.Default.Delete, "삭제", modifier = Modifier.clickable { onSave(items.filter { it.id != item.id }) }, tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                            if (item.images.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                    item.images.forEachIndexed { index, uri ->
+                                        UriImage(uriString = uri, modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)).clickable { onShowMultiImage(item.images, index) })
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
                                 }
                             }
                         }
@@ -3963,19 +4073,56 @@ fun SimpleItemManager(nameLabel: String, items: List<SimpleItem>, onSave: (List<
         var n by remember { mutableStateOf(editingItem?.name ?: "") }
         var d by remember { mutableStateOf(editingItem?.desc ?: "") }
         var gml by remember { mutableStateOf(editingItem?.googleMapLink ?: "") }
+        var images by remember { mutableStateOf(editingItem?.images ?: emptyList()) }
+        var isMustVisit by remember { mutableStateOf(editingItem?.isMustVisit ?: false) }
+        var isVisited by remember { mutableStateOf(editingItem?.isVisited ?: false) }
+
+        val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            uri?.let {
+                coroutineScope.launch(Dispatchers.IO) {
+                    val savedPath = saveImageToInternalStorage(context, it)
+                    withContext(Dispatchers.Main) { if (savedPath.isNotBlank()) images = images + savedPath }
+                }
+            }
+        }
+
         AlertDialog(
             onDismissRequest = { showDialog = false },
             title = { Text("항목 편집", fontSize = LocalAppTypography.current.title) },
             text = {
-                Column {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = isMustVisit, onCheckedChange = { isMustVisit = it })
+                        Text("🔥 꼭 가고싶은 곳", fontSize = LocalAppTypography.current.small)
+                        Spacer(Modifier.width(8.dp))
+                        Checkbox(checked = isVisited, onCheckedChange = { isVisited = it })
+                        Text("✅ 방문 완료", fontSize = LocalAppTypography.current.small)
+                    }
                     OutlinedTextField(value = n, onValueChange = { n = it }, label = { Text(nameLabel) }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = gml, onValueChange = { gml = it }, label = { Text("구글맵 링크") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = d, onValueChange = { d = it }, label = { Text("설명") }, minLines = 3, modifier = Modifier.fillMaxWidth())
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("이미지 첨부 (${images.size}장)", fontSize = LocalAppTypography.current.small, color = Color.Gray)
+                    if (images.isNotEmpty()) {
+                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()).padding(top = 8.dp)) {
+                            images.forEachIndexed { index, uri ->
+                                Box {
+                                    UriImage(uriString = uri, modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)))
+                                    IconButton(onClick = { val mut = images.toMutableList(); mut.removeAt(index); images = mut }, modifier = Modifier.align(Alignment.TopEnd).size(20.dp)) {
+                                        Icon(Icons.Default.Close, "삭제", tint = Color.Red)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                        }
+                    }
+                    Button(onClick = { imagePicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("이미지 추가") }
                 }
             },
             confirmButton = {
                 Button(onClick = {
-                    val newItem = SimpleItem(editingItem?.id ?: UUID.randomUUID().toString(), n, d, gml)
+                    val newItem = SimpleItem(editingItem?.id ?: UUID.randomUUID().toString(), n, d, gml, images, isMustVisit, isVisited)
                     val newList = items.toMutableList()
                     val idx = newList.indexOfFirst { it.id == newItem.id }
                     if (idx >= 0) newList[idx] = newItem else newList.add(newItem)
@@ -3987,11 +4134,15 @@ fun SimpleItemManager(nameLabel: String, items: List<SimpleItem>, onSave: (List<
     }
 }
 
-/** [지역 관리 공통] 식당 관리 (맛집, 가성비 맛집 등 HTML 동기화 대상) */
+/** * [지역 관리 공통] 식당 관리 (맛집, 가성비 맛집)
+ * 다중 이미지 첨부 및 방문상태(isMustVisit, isVisited) 체크박스 추가
+ */
 @Composable
-fun RestaurantManager(items: List<RestaurantItem>, onSave: (List<RestaurantItem>) -> Unit) {
+fun RestaurantManager(items: List<RestaurantItem>, onShowMultiImage: (List<String>, Int) -> Unit, onSave: (List<RestaurantItem>) -> Unit) {
+    val context = LocalContext.current
     var showDialog by remember { mutableStateOf(false) }
     var editingItem by remember { mutableStateOf<RestaurantItem?>(null) }
+    val coroutineScope = rememberCoroutineScope()
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (items.isEmpty()) {
@@ -4002,13 +4153,26 @@ fun RestaurantManager(items: List<RestaurantItem>, onSave: (List<RestaurantItem>
                     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(item.name, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), fontSize = LocalAppTypography.current.body)
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    if (item.isVisited) Text("✅ ", fontSize = LocalAppTypography.current.menu)
+                                    else if (item.isMustVisit) Text("🔥 ", fontSize = LocalAppTypography.current.menu)
+                                    Text(item.name, fontWeight = FontWeight.Bold, fontSize = LocalAppTypography.current.body)
+                                }
                                 Row {
                                     Icon(Icons.Default.Edit, "수정", modifier = Modifier.clickable { editingItem = item; showDialog = true }.padding(end=8.dp), tint = MaterialTheme.colorScheme.primary)
                                     Icon(Icons.Default.Delete, "삭제", modifier = Modifier.clickable { onSave(items.filter { it.id != item.id }) }, tint = MaterialTheme.colorScheme.error)
                                 }
                             }
-                            Text("메뉴: ${item.menu}", fontSize = LocalAppTypography.current.body)
+                            if (item.images.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                                    item.images.forEachIndexed { index, uri ->
+                                        UriImage(uriString = uri, modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)).clickable { onShowMultiImage(item.images, index) })
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+                                }
+                            }
+                            Text("메뉴: ${item.menu}", fontSize = LocalAppTypography.current.body, modifier = Modifier.padding(top=4.dp))
                         }
                     }
                 }
@@ -4022,20 +4186,57 @@ fun RestaurantManager(items: List<RestaurantItem>, onSave: (List<RestaurantItem>
         var d by remember { mutableStateOf(editingItem?.desc ?: "") }
         var m by remember { mutableStateOf(editingItem?.menu ?: "") }
         var gml by remember { mutableStateOf(editingItem?.googleMapLink ?: "") }
+        var images by remember { mutableStateOf(editingItem?.images ?: emptyList()) }
+        var isMustVisit by remember { mutableStateOf(editingItem?.isMustVisit ?: false) }
+        var isVisited by remember { mutableStateOf(editingItem?.isVisited ?: false) }
+
+        val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+            uri?.let {
+                coroutineScope.launch(Dispatchers.IO) {
+                    val savedPath = saveImageToInternalStorage(context, it)
+                    withContext(Dispatchers.Main) { if (savedPath.isNotBlank()) images = images + savedPath }
+                }
+            }
+        }
+
         AlertDialog(
             onDismissRequest = { showDialog = false },
             title = { Text("맛집 편집", fontSize = LocalAppTypography.current.title) },
             text = {
-                Column {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = isMustVisit, onCheckedChange = { isMustVisit = it })
+                        Text("🔥 꼭 가고싶은 곳", fontSize = LocalAppTypography.current.small)
+                        Spacer(Modifier.width(8.dp))
+                        Checkbox(checked = isVisited, onCheckedChange = { isVisited = it })
+                        Text("✅ 방문 완료", fontSize = LocalAppTypography.current.small)
+                    }
                     OutlinedTextField(value = n, onValueChange = { n = it }, label = { Text("가게명") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = m, onValueChange = { m = it }, label = { Text("메뉴") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = gml, onValueChange = { gml = it }, label = { Text("구글맵 링크") }, modifier = Modifier.fillMaxWidth())
                     OutlinedTextField(value = d, onValueChange = { d = it }, label = { Text("설명") }, minLines = 3, modifier = Modifier.fillMaxWidth())
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("이미지 첨부 (${images.size}장)", fontSize = LocalAppTypography.current.small, color = Color.Gray)
+                    if (images.isNotEmpty()) {
+                        Row(modifier = Modifier.horizontalScroll(rememberScrollState()).padding(top = 8.dp)) {
+                            images.forEachIndexed { index, uri ->
+                                Box {
+                                    UriImage(uriString = uri, modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)))
+                                    IconButton(onClick = { val mut = images.toMutableList(); mut.removeAt(index); images = mut }, modifier = Modifier.align(Alignment.TopEnd).size(20.dp)) {
+                                        Icon(Icons.Default.Close, "삭제", tint = Color.Red)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                            }
+                        }
+                    }
+                    Button(onClick = { imagePicker.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("이미지 추가") }
                 }
             },
             confirmButton = {
                 Button(onClick = {
-                    val newItem = RestaurantItem(editingItem?.id ?: UUID.randomUUID().toString(), n, d, m, gml)
+                    val newItem = RestaurantItem(editingItem?.id ?: UUID.randomUUID().toString(), n, d, m, gml, images, isMustVisit, isVisited)
                     val newList = items.toMutableList()
                     val idx = newList.indexOfFirst { it.id == newItem.id }
                     if (idx >= 0) newList[idx] = newItem else newList.add(newItem)
@@ -4049,7 +4250,7 @@ fun RestaurantManager(items: List<RestaurantItem>, onSave: (List<RestaurantItem>
 
 /** [지역 관리 탭 12] 갤러리 이미지 관리 */
 @Composable
-fun GalleryManager(items: List<GalleryItem>, onShowImage: (String) -> Unit, onSave: (List<GalleryItem>) -> Unit) {
+fun GalleryManager(items: List<GalleryItem>, onShowMultiImage: (List<String>, Int) -> Unit, onSave: (List<GalleryItem>) -> Unit) {
     val context = LocalContext.current
     var showDialog by remember { mutableStateOf(false) }
     var editingItem by remember { mutableStateOf<GalleryItem?>(null) }
@@ -4069,6 +4270,8 @@ fun GalleryManager(items: List<GalleryItem>, onShowImage: (String) -> Unit, onSa
         if (items.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("등록된 사진이 없습니다.", fontSize = LocalAppTypography.current.body) }
         } else {
+            val allGalleryUris = items.map { it.imageUri }.filter { it.isNotBlank() }
+
             LazyColumn {
                 items(items) { item ->
                     Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
@@ -4078,7 +4281,9 @@ fun GalleryManager(items: List<GalleryItem>, onShowImage: (String) -> Unit, onSa
                                     if (item.imageUri.isNotBlank()) {
                                         UriImage(
                                             uriString = item.imageUri,
-                                            modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)).clickable { onShowImage(item.imageUri) }
+                                            modifier = Modifier.size(60.dp).clip(RoundedCornerShape(8.dp)).clickable {
+                                                onShowMultiImage(allGalleryUris, allGalleryUris.indexOf(item.imageUri).coerceAtLeast(0))
+                                            }
                                         )
                                         Spacer(modifier = Modifier.width(8.dp))
                                     }
@@ -4214,11 +4419,13 @@ fun AudioGuideManager(dbHelper: DatabaseHelper, countryId: Int, regionId: Int, r
         // 하위 가이드 리스트
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             if (attractions.isEmpty()) {
-                Text("상단의 '+' 버튼을 눌러 관광지를 추가해주세요.", modifier = Modifier.align(Alignment.Center), color = Color.Gray, fontSize = LocalAppTypography.current.body)
+                // [다크모드 수정] Color.Gray -> MaterialTheme.colorScheme.onSurfaceVariant
+                Text("상단의 '+' 버튼을 눌러 관광지를 추가해주세요.", modifier = Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = LocalAppTypography.current.body)
             } else if (selectedAttraction != null) {
                 val filteredGuides = regionData.audioGuides.filter { it.attraction == selectedAttraction }.sortedBy { it.sequence }
                 if (filteredGuides.isEmpty()) {
-                    Text("등록된 오디오 가이드가 없습니다.", modifier = Modifier.align(Alignment.Center), color = Color.Gray, fontSize = LocalAppTypography.current.body)
+                    // [다크모드 수정] Color.Gray -> MaterialTheme.colorScheme.onSurfaceVariant
+                    Text("등록된 오디오 가이드가 없습니다.", modifier = Modifier.align(Alignment.Center), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = LocalAppTypography.current.body)
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxSize()) {
                         items(filteredGuides) { item ->
@@ -4344,7 +4551,8 @@ fun AudioGuideManager(dbHelper: DatabaseHelper, countryId: Int, regionId: Int, r
                 Column {
                     Text("[$selectedAttraction] 관광지와 하위 오디오 가이드를 통째로 이동할 지역을 선택하세요.", fontSize = LocalAppTypography.current.body)
                     Spacer(modifier = Modifier.height(8.dp))
-                    LazyColumn(modifier = Modifier.height(200.dp).background(Color(0xFFF5F5F5), RoundedCornerShape(8.dp))) {
+                    // [다크모드 수정] 이동 팝업의 바탕을 테마의 surfaceVariant로 변경
+                    LazyColumn(modifier = Modifier.height(200.dp).background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))) {
                         items(regionsList) { regionItem ->
                             Row(
                                 modifier = Modifier
@@ -4364,11 +4572,9 @@ fun AudioGuideManager(dbHelper: DatabaseHelper, countryId: Int, regionId: Int, r
                 Button(
                     onClick = {
                         if (targetRegionId != null) {
-                            // 1. 타겟 지역 데이터 가져오기
                             val targetJson = dbHelper.getRegionData(targetRegionId!!)
                             val targetData = try { if (targetJson.isNotEmpty()) gson.fromJson(targetJson, RegionData::class.java) ?: RegionData() else RegionData() } catch (e: Exception) { RegionData() }
 
-                            // 2. 옮길 가이드 필터링 및 타겟에 추가
                             val guidesToMove = regionData.audioGuides.filter { it.attraction == selectedAttraction }
                             val newTargetAttrs = targetData.audioAttractions.toMutableList()
                             if (!newTargetAttrs.contains(selectedAttraction)) newTargetAttrs.add(selectedAttraction!!)
@@ -4378,7 +4584,6 @@ fun AudioGuideManager(dbHelper: DatabaseHelper, countryId: Int, regionId: Int, r
                             val updatedTargetData = targetData.copy(audioAttractions = newTargetAttrs, audioGuides = newTargetGuides)
                             dbHelper.updateRegionData(targetRegionId!!, gson.toJson(updatedTargetData))
 
-                            // 3. 현재 지역에서는 해당 데이터 삭제
                             val newCurrentAttrs = regionData.audioAttractions.filter { it != selectedAttraction }
                             val newCurrentGuides = regionData.audioGuides.filter { it.attraction != selectedAttraction }
                             onSave(regionData.copy(audioAttractions = newCurrentAttrs, audioGuides = newCurrentGuides))
